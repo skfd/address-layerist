@@ -87,35 +87,16 @@ def _street_index(name):
 
 
 def _assign_tile_colors(streets):
-    """Map each street in this tile to a unique palette colour.
+    """Map each street to its stable palette colour.
 
-    Each street's preferred index is its hash mod len(_PALETTE).  When two
-    streets in the same tile prefer the same slot, the one with the higher
-    md5 hash keeps the slot and the other shifts to the next free slot.
-    Cross-tile consistency: a street that never collides stays one colour
-    everywhere; one that does, shifts only in tiles where the collision
-    actually occurs.
+    The colour is a pure function of the street name (hash -> palette slot),
+    so a street keeps the same colour in every tile it appears in.  Earlier
+    versions resolved same-slot collisions per tile by shifting the loser to
+    the next free slot, but that made a street's colour flip across a tile
+    seam whenever it collided in one tile and not the neighbour.  Two streets
+    sharing a colour is preferable to that flicker.
     """
-    # Higher md5 wins -- deterministic and independent of iteration order.
-    ordered = sorted(
-        (s for s in streets if s),
-        key=lambda s: hashlib.md5(s.encode("utf-8")).digest(),
-        reverse=True,
-    )
-    used = set()
-    result = {}
-    for st in ordered:
-        preferred = _street_index(st)
-        for offset in range(len(_PALETTE)):
-            idx = (preferred + offset) % len(_PALETTE)
-            if idx not in used:
-                result[st] = _PALETTE[idx]
-                used.add(idx)
-                break
-        else:
-            # More streets in tile than palette slots -- fall back to preferred.
-            result[st] = _PALETTE[preferred]
-    return result
+    return {st: _PALETTE[_street_index(st)] for st in streets if st}
 
 
 def _color_of(color_map, name):
