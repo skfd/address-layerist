@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}} &mdash; Reference Layer for OSM Editors</title>
+<link rel="stylesheet" href="index.css">
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="">
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script defer src="index.js"></script>
+</head>
+<body>
+<main>
+
+<h1>{{TITLE}}</h1>
+<p class="lead">
+  A reference layer of every municipal address point published by the
+  {{PROVIDER}} &mdash; <strong>{{POINT_COUNT}}</strong> addresses &mdash; ready to
+  add to the <a href="https://www.openstreetmap.org">OpenStreetMap</a> editors
+  <strong>iD</strong> and <strong>JOSM</strong> while you map.
+</p>
+<p class="meta">Source data: {{DATA_DATE}} &middot; tiles rebuilt: {{BUILD_DATE}}</p>
+
+<div class="attribution">
+  Address data &copy; {{PROVIDER}}, published under {{LICENSE_BLOCK}}.
+  Source: <a href="{{DATASET_PAGE}}">dataset page</a>.
+</div>
+
+<h2>Preview</h2>
+<div id="preview-map"
+     data-raster-url="{{RASTER_URL}}"
+     data-center-lat="{{CENTER_LAT}}"
+     data-center-lon="{{CENTER_LON}}"
+     data-center-zoom="{{CENTER_ZOOM}}"
+     data-raster-min="{{RASTER_MINZOOM}}"
+     data-raster-max="{{RASTER_MAXZOOM}}"></div>
+<p class="meta">
+  The raster (house-number) layer drawn over OpenStreetMap. Pan and zoom to
+  check coverage for the area you map.
+</p>
+
+<h2>Two layers &mdash; which to use</h2>
+<table>
+  <tr>
+    <th>Vector layer</th>
+    <td>Interactive. Click a point to read its address tags
+        (<code>addr</code>, <code>housenumber</code>, <code>street</code>).
+        Best in <strong>iD</strong>.</td>
+  </tr>
+  <tr>
+    <th>Raster layer</th>
+    <td>House numbers drawn as text directly on the tiles. A readable backdrop.
+        Best in <strong>JOSM</strong>.</td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>Heads-up:</strong> these tiles only render once you zoom in. Vector
+  points start appearing at city zoom; house-number labels show from about
+  zoom {{RASTER_MINZOOM}}. If your editor looks empty after adding the layer,
+  zoom in closer.
+</div>
+
+<h2>Add to iD</h2>
+<h3>Vector layer (interactive)</h3>
+<ol>
+  <li>Open the iD editor and press <kbd>U</kbd> for the <em>Map Data</em> panel.</li>
+  <li>Under <em>Custom Map Data</em>, open the settings and paste this URL:</li>
+</ol>
+<pre class="url">{{VECTOR_URL}}</pre>
+<p>Zoom in, then click any point to see its address tags in the inspector.</p>
+{{ID_FIGURE}}
+
+<h3>Raster layer (visible numbers)</h3>
+<ol>
+  <li>Open the <em>Background</em> panel and choose <em>Custom</em>.</li>
+  <li>Paste this URL template:</li>
+</ol>
+<pre class="url">{{RASTER_URL}}</pre>
+
+<div class="note">
+  <strong>Tip:</strong> enable <em>both</em> layers at once. iD renders the
+  vector layer as small pink dots with house-number labels (and click-to-inspect
+  for the full address tags); the raster background makes the numbers readable
+  at a glance.
+</div>
+
+<h2>Add to JOSM</h2>
+<h3>Raster layer (recommended for JOSM)</h3>
+<ol>
+  <li>Open <em>Preferences &rarr; Imagery</em> and click <strong>+TMS</strong>.</li>
+  <li>Paste this entry (the <code>tms[..]</code> prefix sets the zoom range;
+      JOSM scales it up past the top zoom):</li>
+</ol>
+<pre class="url">tms[{{RASTER_MINZOOM}},{{RASTER_MAXZOOM}}]:{{RASTER_URL_JOSM}}</pre>
+<p>
+  Give it a name such as <em>{{TITLE}}</em>, click OK, then enable it from the
+  <em>Imagery</em> menu. Note JOSM's placeholder is <code>{zoom}</code>, not
+  <code>{z}</code>.
+</p>
+{{JOSM_FIGURE}}
+
+<h3>Vector layer (optional)</h3>
+<p>
+  JOSM can also add the vector tiles via <em>Preferences &rarr; Imagery</em> &rarr;
+  <strong>+MVT</strong>:
+</p>
+<pre class="url">{{VECTOR_URL_JOSM}}</pre>
+<p>
+  JOSM renders the points but does not draw the house-number text &mdash; that is
+  what the raster layer above is for.
+</p>
+
+<h2>Notes</h2>
+<ul>
+  <li>Vector tiles are pre-rendered through zoom {{VECTOR_MAXZOOM}}; raster tiles
+      for z{{RASTER_MINZOOM}}&ndash;{{RASTER_MAXZOOM}} (the editor overzooms
+      beyond that).</li>
+  <li>Tiles are refreshed daily from the source dataset.</li>
+  <li>This is a <strong>reference</strong> layer &mdash; verify against survey or
+      imagery before copying anything into OpenStreetMap.</li>
+</ul>
+
+<footer>
+  <a href="https://github.com/{{GITHUB_REPO}}">Project source on GitHub</a>
+  {{FOOTER_EXTRA}}
+</footer>
+
+</main>
+</body>
+</html>
