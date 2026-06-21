@@ -4,6 +4,10 @@ Adapted from ontario-address-changes, plus a HEAD smart-cache (from the Toronto
 layer's download.py): when the remote's Last-Modified/Content-Length match the
 last download, reuse the existing dated file instead of downloading again.
 
+A plain GeoJSON download is already WGS84, so it is moved into place rather than
+parsed whole -- only ijson ever streams it (the source can be ~590 MB). The
+shapefile path still parses + reprojects in memory.
+
 pyshp/pyproj are imported lazily, so a city using plain geojson never needs them.
 """
 
@@ -13,6 +17,7 @@ import os
 import zipfile
 from datetime import date
 
+import ijson
 import requests
 
 TIMEOUT = 300
@@ -77,10 +82,10 @@ def _unzip(path, dest_dir):
         z.extractall(dest_dir)
 
 
-def _read_geojson(path):
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("features", [])
+def _count_features(path):
+    """Stream-count Features without loading the file into memory."""
+    with open(path, "rb") as f:
+        return sum(1 for _ in ijson.items(f, "features.item"))
 
 
 def _read_shapefile(shp_path):
@@ -128,7 +133,7 @@ def fetch(cfg, force=False):
         cached = _cached_if_unchanged(cfg)
         if cached:
             print(f"  using cached {os.path.basename(cached)} (remote unchanged)")
-            return cached, _read_geojson(cached)
+            return cached, _count_features(cached)
 
     filename = f"{cfg.slug}-{date.today().isoformat()}.geojson"
     filepath = os.path.join(cfg.data_dir, filename)
@@ -146,8 +151,11 @@ def fetch(cfg, force=False):
     if cfg.format == "shapefile":
         shp = _locate(work, "*.shp")
         print(f"  reading shapefile {os.path.basename(shp)}")
-        features = _read_shapefile(shp)
-    else:  # geojson
+        features = _read_shapefile(shp)  # reprojected to WGS84 in memory
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump({"type": "FeatureCollection", "features": features}, f)
+        count = len(features)
+    else:  # geojson -- already WGS84; move it into place without parsing whole
         if is_zip:
             try:
                 src = _locate(work, "*.geojson")
@@ -155,10 +163,9 @@ def fetch(cfg, force=False):
                 src = _locate(work, "*.json")
         else:
             src = raw
-        features = _read_geojson(src)
+        os.replace(src, filepath)
+        count = _count_features(filepath)
 
-    print(f"  parsed {len(features):,} features")
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump({"type": "FeatureCollection", "features": features}, f)
+    print(f"  parsed {count:,} features")
     _save_sidecar(cfg, headers, filename)
-    return filepath, features
+    return filepath, count

@@ -52,7 +52,7 @@ def fetch(cfg, force=False):
     if os.path.exists(filepath) and not force:
         print(f"  using cached {filename}")
         with open(filepath, encoding="utf-8") as f:
-            return filepath, json.load(f)["features"]
+            return filepath, len(json.load(f)["features"])
 
     meta = _layer_meta(cfg.data_url)
     page = min(meta.get("maxRecordCount") or DEFAULT_PAGE, DEFAULT_PAGE)
@@ -83,4 +83,4 @@ def fetch(cfg, force=False):
     os.makedirs(cfg.data_dir, exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump({"type": "FeatureCollection", "features": features}, f)
-    return filepath, features
+    return filepath, len(features)

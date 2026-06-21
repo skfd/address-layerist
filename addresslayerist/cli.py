@@ -44,8 +44,8 @@ def _latest_geojson(cfg):
 
 def cmd_fetch(cfg, args):
     _banner("Fetch")
-    path, feats = _fetch(cfg, force=args.force)
-    print(f"  {len(feats):,} features -> {path}")
+    path, count = _fetch(cfg, force=args.force)
+    print(f"  {count:,} features -> {path}")
 
 
 def cmd_slim(cfg, args):
