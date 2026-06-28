@@ -1,19 +1,18 @@
 """CLI for the address-layerist engine. Run from a city repo that has a layer.toml.
 
-    addresslayerist fetch     # fetch latest address GeoJSON (arcgis or static)
-    addresslayerist slim      # stream it into a slim GeoJSONL + meta
+    addresslayerist slim      # stream the input GeoJSON into a slim GeoJSONL + meta
     addresslayerist vector    # build vector (MVT) tiles via WSL tippecanoe
     addresslayerist raster    # build labelled raster (PNG) tiles
     addresslayerist site      # render the landing page
     addresslayerist publish   # force-push build/site to gh-pages
-    addresslayerist build     # fetch + slim + vector + raster + site
+    addresslayerist build     # slim + vector + raster + site
     addresslayerist update    # build + publish (the daily entry point)
     addresslayerist onboard   # how to add a new city (prints guidance)
 
-Raw address data is fetched from and stored in address-vault (the central tiered
-store), not pulled here. Set ADDRESSVAULT_DIR to the vault folder: 'fetch' pulls
-the latest dump into the vault, the build steps read it back. Inspect or restore
-archived days with the 'addressvault' CLI.
+The engine builds tiles from an input GeoJSON; it does not acquire data. By
+default it slims the newest ``<slug>-DATE.geojson`` in ``input_dir`` (layer.toml)
+or, failing that, ``$ADDRESSVAULT_DIR`` -- whatever produced those files (e.g.
+``addressvault pull <slug>``) is the caller's concern. Override with ``--input``.
 """
 
 import argparse
@@ -30,43 +29,11 @@ def _banner(text):
     print(f"\n=== {text} ===")
 
 
-def _vault(cfg):
-    """A Vault handle with this city's source registered from its layer.toml.
-
-    The data-source keys are byte-compatible, so the engine seeds the vault from
-    the same layer.toml it already loads -- no separate registration step."""
-    from addressvault import Source, Vault
-    v = Vault()  # uses ADDRESSVAULT_DIR
-    v.add_source(Source(
-        slug=cfg.slug, provider=cfg.provider, data_url=cfg.data_url,
-        access=cfg.access, format=cfg.format, source_crs=cfg.source_crs,
-        fields=cfg.fields, license_name=cfg.license_name,
-    ))
-    return v
-
-
-def _latest_geojson(cfg):
-    """Hot path to the latest vault snapshot, thawing it if it has gone cold."""
-    from addressvault import Archived
-    v = _vault(cfg)
-    try:
-        return v.path(cfg.slug, "latest")
-    except Archived:
-        v.thaw(cfg.slug, v.snapshot(cfg.slug, "latest").date)
-        return v.path(cfg.slug, "latest")
-    except LookupError:
-        raise SystemExit(f"No vault data for {cfg.slug}. Run 'fetch' first.")
-
-
-def cmd_fetch(cfg, args):
-    _banner("Fetch")
-    snap = _vault(cfg).pull(cfg.slug, force=args.force)
-    print(f"  {snap.features:,} features -> vault {cfg.slug} {snap.date}")
-
-
 def cmd_slim(cfg, args):
     _banner("Slim")
-    _slim(cfg, _latest_geojson(cfg))
+    src = cfg.input_path(getattr(args, "input", None))
+    print(f"  input: {src}")
+    _slim(cfg, src)
 
 
 def cmd_vector(cfg, args):
@@ -94,7 +61,6 @@ def cmd_publish(cfg, args):
 
 
 def cmd_build(cfg, args):
-    cmd_fetch(cfg, args)
     cmd_slim(cfg, args)
     cmd_vector(cfg, args)
     cmd_raster(cfg, args)
@@ -107,13 +73,12 @@ def cmd_update(cfg, args):
 
 
 COMMANDS = {
-    "fetch": (cmd_fetch, "Fetch the latest address GeoJSON (arcgis or static)"),
-    "slim": (cmd_slim, "Stream it into a slim GeoJSONL + meta"),
+    "slim": (cmd_slim, "Stream the input GeoJSON into a slim GeoJSONL + meta"),
     "vector": (cmd_vector, "Build vector (MVT) tiles via WSL tippecanoe"),
     "raster": (cmd_raster, "Build labelled raster (PNG) tiles"),
     "site": (cmd_site, "Render the landing page"),
     "publish": (cmd_publish, "Force-push build/site to the gh-pages branch"),
-    "build": (cmd_build, "fetch + slim + vector + raster + site"),
+    "build": (cmd_build, "slim + vector + raster + site"),
     "update": (cmd_update, "build + publish (daily scheduled-task entry point)"),
 }
 
@@ -142,10 +107,10 @@ def main():
             "-c", "--config", default="layer.toml",
             help="Path to the city config (default: layer.toml)",
         )
-        if name in ("fetch", "build", "update"):
+        if name in ("slim", "build", "update"):
             p.add_argument(
-                "--force", action="store_true",
-                help="Re-fetch even if the remote is unchanged",
+                "--input",
+                help="Input GeoJSON path (default: newest <slug>-DATE.geojson in input_dir)",
             )
 
     args = parser.parse_args()
@@ -155,8 +120,6 @@ def main():
     if args.command == "onboard":
         print(ONBOARD_HELP)
         return
-    if not hasattr(args, "force"):
-        args.force = False
 
     cfg = _config.load(getattr(args, "config", "layer.toml"))
     COMMANDS[args.command][0](cfg, args)

@@ -17,11 +17,10 @@ can approach GitHub Pages' ~1 GB limit (Toronto alone is ~1 GB; raster is ~94%).
 
 ## Locked vs fuzzy
 
-- **Locked (this engine, deterministic):** registry/config load, fetch (pulls the
-  latest snapshot from `address-vault`, which owns the `arcgis`/`static`
-  acquisition + reproject and the restic archive), slim, tile math, vector
-  (tippecanoe via WSL), raster (Pillow labeller), site templating, publish
-  (orphan gh-pages).
+- **Locked (this engine, deterministic):** registry/config load, slim (of an
+  input GeoJSON), tile math, vector (tippecanoe via WSL), raster (Pillow
+  labeller), site templating, publish (orphan gh-pages). The engine does **not**
+  acquire data -- it slims whatever GeoJSON it is pointed at (see *Data input*).
 - **Fuzzy (a Claude Code skill):** onboarding a new city -- find the source, map
   number/street/unit/full, set licence/attribution, write `layer.toml`. See
   [`skills/onboard-city/SKILL.md`](skills/onboard-city/SKILL.md).
@@ -41,13 +40,24 @@ oakville-address-layer/
 ```
 
 ```
-pip install -e ../address-layerist      # once (add [shapefile] for shapefile sources)
-python run.py build                  # fetch + slim + vector + raster + site
+pip install -e ../address-layerist      # once
+addressvault pull <slug>             # acquire the data (separate tool; not the engine)
+python run.py build                  # slim + vector + raster + site
 python run.py update                 # build + publish (daily entry point)
 ```
 
-Individual steps: `fetch slim vector raster site publish`. Run
+Individual steps: `slim vector raster site publish`. Run
 `addresslayerist onboard` for onboarding guidance.
+
+### Data input
+
+The engine never downloads. `slim` reads, in order: `--input PATH`; else the
+newest `<slug>-DATE.geojson` in `input_dir` (a `layer.toml` key); else the newest
+such file in `$ADDRESSVAULT_DIR`. It treats that directory as a plain folder of
+dated dumps -- it has no knowledge of `address-vault`. Whatever populates it (the
+`addressvault pull <slug>` step above, a manual download, anything) is the
+caller's concern, so the daily scheduled task is `addressvault pull <slug> &&
+python run.py update`.
 
 ## Key locked-in rules
 
@@ -55,17 +65,15 @@ Individual steps: `fetch slim vector raster site publish`. Run
   (`number->housenumber`, `street->street`, `full->addr`, `unit->unit`,
   `name=housenumber` for iD), so raster/vector need no per-city code. Extra
   source props ship via `[layer].mvt_extra`.
-- **Slim sanity is source-relative:** fail if fewer than 95% of fetched features
+- **Slim sanity is source-relative:** fail if fewer than 95% of the input features
   survive (no per-city magic count bounds).
-- **Fetch dispatches on `access`** (`arcgis` | `static`); nothing else changes
-  per city.
 
 ## Requirements
 
-- Python >= 3.11. Installs `addressvault`, `Pillow`, `ijson` (see pyproject);
-  shapefile/zip sources and reprojection are handled inside `address-vault`.
-- `ADDRESSVAULT_DIR` set to the vault folder -- raw address dumps are fetched into
-  and read from `address-vault`, not stored in the city repo.
+- Python >= 3.11. Installs `Pillow`, `ijson` (see pyproject). The engine has no
+  data-acquisition dependency.
+- An input GeoJSON the engine can find (see *Data input*) -- e.g. `ADDRESSVAULT_DIR`
+  set to a folder of `<slug>-DATE.geojson` dumps, or `--input PATH`.
 - WSL2 + tippecanoe for the vector step -- see [wsl-setup.md](wsl-setup.md).
 
 ## Tests

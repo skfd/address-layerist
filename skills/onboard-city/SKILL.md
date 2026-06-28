@@ -6,9 +6,10 @@ description: Onboard a new municipality into an address tile layer. Use when ask
 # Onboard a city into an address layer
 
 This is the **fuzzy** half of address-layerist: the judgement work that turns a
-municipality into a `layer.toml`. The engine (fetch/slim/vector/raster/site/
-publish) is locked and deterministic; everything below is what only a human or
-Claude can decide. The `layer.toml` you produce is the contract between them.
+municipality into a `layer.toml`. The engine (slim/vector/raster/site/publish) is
+locked and deterministic; everything below is what only a human or Claude can
+decide. The `layer.toml` you produce is the contract between them. (The engine
+does not fetch -- data is acquired separately, e.g. `addressvault pull <slug>`.)
 
 Work through the steps in order. Stop and ask the user only when a fact is
 genuinely unavailable (e.g. no open data source exists, or the licence forbids
@@ -103,7 +104,8 @@ A city repo is thin. Alongside `layer.toml`:
 
 ```
 pip install -e ../address-layerist      # once
-python run.py build                  # fetch + slim + vector + raster + site
+addressvault pull <slug>             # acquire the data (separate tool)
+python run.py build                  # slim + vector + raster + site
 ```
 
 Open `build/site/index.html`; confirm the city strings, the preview map centred

@@ -17,7 +17,10 @@ from dataclasses import dataclass, field
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENGINE_ASSETS_DIR = os.path.join(PACKAGE_DIR, "assets")
 
-_REQUIRED = ("slug", "provider", "data_url", "access", "format")
+# The engine builds tiles from an input GeoJSON; it does not fetch. Only the
+# tiling-relevant keys are required. The data-source keys (data_url/access/format)
+# remain optional for byte-compatibility with ontario-address-changes datasets.
+_REQUIRED = ("slug", "provider")
 _VALID_ACCESS = ("arcgis", "static")
 _VALID_FORMAT = ("geojson", "shapefile")
 
@@ -27,12 +30,13 @@ class Config:
     # --- data source (shared shape with ontario-address-changes) ---
     slug: str
     provider: str
-    data_url: str
-    access: str
-    format: str
+    data_url: str = ""                   # data-source keys: kept for registry
+    access: str = ""                     # byte-compatibility; the engine does not fetch
+    format: str = ""
     license_name: str = ""
     source_crs: str = ""                 # e.g. "EPSG:2952"; reproject to WGS84
     fields: dict = field(default_factory=dict)   # canonical -> source property
+    input_dir: str = ""                  # where to find <slug>-DATE.geojson (default: $ADDRESSVAULT_DIR)
 
     # --- layer-only ([layer] table) ---
     title: str = ""
@@ -87,6 +91,29 @@ class Config:
     def meta_path(self):
         return os.path.join(self.data_dir, f"{self.slug}-meta.json")
 
+    def input_path(self, override=None):
+        """The GeoJSON to slim. ``override`` (--input) wins; otherwise the newest
+        ``<slug>-DATE.geojson`` in ``input_dir`` (default: $ADDRESSVAULT_DIR).
+
+        The engine treats that directory as a plain folder of dated dumps -- it
+        has no knowledge of how the files got there (e.g. ``addressvault pull``)."""
+        if override:
+            return override
+        import glob
+        d = self.input_dir or os.environ.get("ADDRESSVAULT_DIR")
+        if not d:
+            raise SystemExit(
+                "No input dir. Set ADDRESSVAULT_DIR, set input_dir in layer.toml, "
+                "or pass --input PATH."
+            )
+        hits = sorted(glob.glob(os.path.join(d, f"{self.slug}-*.geojson")))
+        if not hits:
+            raise SystemExit(
+                f"No {self.slug}-*.geojson in {d}. Provide the data first "
+                f"(e.g. 'addressvault pull {self.slug}')."
+            )
+        return hits[-1]  # ISO dates in the name sort lexically -> newest last
+
     @property
     def vector_tile_dir(self):
         return os.path.join(self.site_dir, "tiles", "vector")
@@ -122,21 +149,22 @@ def load(path="layer.toml", project_dir=None):
     missing = [k for k in _REQUIRED if not raw.get(k)]
     if missing:
         raise SystemExit(f"{cfg_path}: missing required keys: {missing}")
-    if raw["access"] not in _VALID_ACCESS:
+    if raw.get("access") and raw["access"] not in _VALID_ACCESS:
         raise SystemExit(f"{cfg_path}: access must be one of {_VALID_ACCESS}")
-    if raw["format"] not in _VALID_FORMAT:
+    if raw.get("format") and raw["format"] not in _VALID_FORMAT:
         raise SystemExit(f"{cfg_path}: format must be one of {_VALID_FORMAT}")
 
     layer = raw.get("layer", {})
     return Config(
         slug=raw["slug"],
         provider=raw["provider"],
-        data_url=raw["data_url"],
-        access=raw["access"],
-        format=raw["format"],
+        data_url=raw.get("data_url", ""),
+        access=raw.get("access", ""),
+        format=raw.get("format", ""),
         license_name=raw.get("license_name", ""),
         source_crs=raw.get("source_crs", ""),
         fields=raw.get("fields", {}),
+        input_dir=raw.get("input_dir", ""),
         title=layer.get("title", ""),
         github_repo=layer.get("github_repo", ""),
         pages_url=layer.get("pages_url", ""),
