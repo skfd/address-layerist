@@ -41,6 +41,14 @@ def build_vector(cfg):
         for line in dropped:
             print(f"  {line}")
 
+    # Clear the Windows output tree *before* exploding. Deleting ~175k small files
+    # takes minutes, and /tmp lives in the WSL2 VM, which shuts itself down after
+    # ~60s idle (vmIdleTimeout) -- so doing it between tile-join and the copy loses
+    # the tiles we just wrote. Nothing below this point leaves WSL idle for long.
+    if os.path.isdir(cfg.vector_tile_dir):
+        shutil.rmtree(cfg.vector_tile_dir)
+    os.makedirs(cfg.vector_tile_dir, exist_ok=True)
+
     print("Exploding mbtiles to a pbf directory ...")
     _wsl(
         cfg,
@@ -48,9 +56,6 @@ def build_vector(cfg):
         f"tile-join -e '{wsl_pbf_dir}' --no-tile-compression '{mbtiles_wsl}'"
     )
 
-    if os.path.isdir(cfg.vector_tile_dir):
-        shutil.rmtree(cfg.vector_tile_dir)
-    os.makedirs(cfg.vector_tile_dir, exist_ok=True)
     print("Copying tiles from WSL to the build output ...")
     _wsl(cfg, f"cp -r '{wsl_pbf_dir}/.' '{win_to_wsl(cfg.vector_tile_dir)}/'")
 
