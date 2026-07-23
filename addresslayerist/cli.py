@@ -16,7 +16,10 @@ or, failing that, ``$ADDRESSVAULT_DIR`` -- whatever produced those files (e.g.
 """
 
 import argparse
+import os
+from importlib import metadata
 
+import addresslayerist
 from addresslayerist import config as _config
 from addresslayerist.slim import slim as _slim
 from addresslayerist.vector import build_vector
@@ -27,6 +30,22 @@ from addresslayerist.publish import publish as _publish
 
 def _banner(text):
     print(f"\n=== {text} ===")
+
+
+def _engine_banner():
+    """Log which engine build is running, and from where.
+
+    City repos pin a release tag; ``pip install -e ../address-layerist`` is a
+    deliberate dev toggle that is easy to leave switched on. A scheduled build
+    silently running a working tree instead of the pin is worth one log line --
+    without it, telling the two apart means reading tracebacks.
+    """
+    try:
+        version = metadata.version("address-layerist")
+    except metadata.PackageNotFoundError:
+        version = "unknown"
+    origin = os.path.dirname(os.path.abspath(addresslayerist.__file__))
+    print(f"address-layerist {version} ({origin})")
 
 
 def cmd_slim(cfg, args):
@@ -121,6 +140,7 @@ def main():
         print(ONBOARD_HELP)
         return
 
+    _engine_banner()
     cfg = _config.load(getattr(args, "config", "layer.toml"))
     COMMANDS[args.command][0](cfg, args)
 
