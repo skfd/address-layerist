@@ -6,9 +6,15 @@ Label placement is greedy with 20 candidate slots per point, in priority order:
   1) 4 inner slots hugging the dot (right, left, above, below) -- no leader.
   2) Outer ring at radius LEADER_R1, 8 compass directions -- with a leader line.
   3) Outer ring at radius LEADER_R2, same 8 directions -- with a leader line.
-A leader is a thin line from the dot edge to the label-box edge.  Leader-line
-bounding boxes are included in the collision check, so leaders won't cross
-other labels.  If even the outer rings collide, the label is dropped.
+A leader is a thin line from the dot edge to the label-box edge.  Leaders take
+part in the collision check as the *segments* they are, so a leader will not
+cross another label or another leader.  Reserving their bounding box instead --
+which is what this did until the exact-geometry fix -- costs far more space than
+it sounds: a diagonal leader's bbox is mostly empty, and for 16-47 HAYS BLVD it
+reserved 329px2 against 154px2 of ink, which is what left its neighbour "15"
+unlabelled with visible white space beside it.  Oakville went from 96 unlabelled
+at z19 to 57, and from 5 to 0 at z20, by measuring the line rather than the
+rectangle around it.  If even the outer rings collide, the label is dropped.
 
 Every dot is seeded into the collision grid before placement starts, so a label
 may never be drawn over *another* address's dot (skfd/oakville-address-layer#2).
@@ -345,6 +351,12 @@ def _place_labels(points, fonts):
     slot is tried at the largest size before any is tried at the next size
     down, so shrinking is a last resort rather than a way to pack tighter.
 
+    Occupancy is kept as two shapes, because a label and its leader claim very
+    different amounts of ground: a label reserves its ink box (plus the halo
+    pad), while a leader reserves only the line itself.  A candidate is free
+    when its box misses every box and every leader, and its own leader crosses
+    neither.  See the module docstring for what the old bbox reservation cost.
+
     Returns (placements, stats).  Each placement is None (dropped) or a
     (anchor, dx, dy, leader, size) tuple where (dx, dy) is the offset of the
     text anchor point from the dot centre, ``leader`` says whether to draw a
@@ -361,7 +373,8 @@ def _place_labels(points, fonts):
             width_cache[key] = w
         return w
 
-    grid = defaultdict(list)
+    boxes = defaultdict(list)     # cell -> [(owner, box)]
+    leaders = defaultdict(list)   # cell -> [(owner, segment)]
 
     def cells(x0, y0, x1, y1):
         cx0, cx1 = int(x0 // _GRID_CELL), int(x1 // _GRID_CELL)
@@ -370,33 +383,53 @@ def _place_labels(points, fonts):
             for cy in range(cy0, cy1 + 1):
                 yield (cx, cy)
 
-    def collides(box, owner):
-        x0, y0, x1, y1 = box
-        seen = set()
-        for key in cells(x0, y0, x1, y1):
-            if key in seen:
-                continue
-            seen.add(key)
-            for oid, ox0, oy0, ox1, oy1 in grid.get(key, ()):
+    def seg_cells(seg):
+        (x0, y0), (x1, y1) = seg
+        return cells(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+    def collides(box, seg, owner):
+        keys = set(cells(*box))
+        if seg is not None:
+            keys |= set(seg_cells(seg))
+        for key in keys:
+            for oid, other in boxes.get(key, ()):
                 if oid == owner:
                     continue    # a point's own dot never blocks its own label
-                if x0 < ox1 and x1 > ox0 and y0 < oy1 and y1 > oy0:
+                if _boxes_overlap(box, other):
+                    return True
+                if seg is not None and _segment_hits_box(seg, other):
+                    return True
+            for oid, other in leaders.get(key, ()):
+                if oid == owner:
+                    continue
+                if _segment_hits_box(other, box):
+                    return True
+                if seg is not None and _segments_cross(seg, other):
                     return True
         return False
 
-    def add(box, owner=_NO_OWNER):
+    def add(box, seg, owner):
+        # The box belongs to nobody once placed -- it may not be re-entered even
+        # by its own point -- while a leader keeps its owner, so the dot it
+        # starts from does not read as a crossing.
         for key in cells(*box):
-            grid[key].append((owner, *box))
+            boxes[key].append((_NO_OWNER, box))
+        if seg is not None:
+            for key in seg_cells(seg):
+                leaders[key].append((owner, seg))
 
     # Seed every dot first -- including points with no label text, which still
     # get drawn -- so no label can be placed on top of one.
     half = DOT_RADIUS + STROKE_WIDTH
     for i, (gx, gy, _text, _st) in enumerate(points):
-        add((gx - half, gy - half, gx + half, gy + half), owner=i)
+        box = (gx - half, gy - half, gx + half, gy + half)
+        for key in cells(*box):
+            boxes[key].append((i, box))
 
     placements = [None] * len(points)
     stats = {"inner": 0, "leadered": 0, "dropped": 0, "shrunk": 0}
     order = sorted(range(len(points)), key=lambda i: (points[i][1], points[i][0]))
+    pad = STROKE_WIDTH
     for i in order:
         gx, gy, text, _st = points[i]
         if not text:
@@ -404,9 +437,12 @@ def _place_labels(points, fonts):
         for size in sizes:
             w = text_w(text, size)
             for anchor, dx, dy, leader in _candidate_placements():
-                box = _placement_footprint((anchor, dx, dy, leader), gx, gy, w, size)
-                if not collides(box, i):
-                    add(box)
+                label_bb = _anchor_bbox(anchor, gx + dx, gy + dy, w, size)
+                box = (label_bb[0] - pad, label_bb[1] - pad,
+                       label_bb[2] + pad, label_bb[3] + pad)
+                seg = _leader_endpoints(gx, gy, label_bb) if leader else None
+                if not collides(box, seg, i):
+                    add(box, seg, i)
                     placements[i] = (anchor, dx, dy, leader, size)
                     stats["leadered" if leader else "inner"] += 1
                     if size != sizes[0]:
@@ -417,6 +453,52 @@ def _place_labels(points, fonts):
         else:
             stats["dropped"] += 1
     return placements, stats
+
+
+def _boxes_overlap(a, b):
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def _segment_hits_box(seg, box):
+    """Segment vs axis-aligned box, by the slab method.
+
+    Clips the segment's parameter range against each of the box's four edges;
+    what survives is the part inside the box, so an empty range means a miss.
+    """
+    (x0, y0), (x1, y1) = seg
+    bx0, by0, bx1, by1 = box
+    dx, dy = x1 - x0, y1 - y0
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, x0 - bx0), (dx, bx1 - x0), (-dy, y0 - by0), (dy, by1 - y0)):
+        if p == 0:
+            if q < 0:       # parallel to this pair of edges and outside them
+                return False
+            continue
+        r = q / p
+        if p < 0:
+            if r > t1:
+                return False
+            t0 = max(t0, r)
+        else:
+            if r < t0:
+                return False
+            t1 = min(t1, r)
+    return t0 <= t1
+
+
+def _segments_cross(s1, s2):
+    """True when two segments properly cross (touching endpoints do not count).
+
+    Leaders radiate from dots, so two of them sharing an endpoint is not a
+    crossing -- only a genuine X is.
+    """
+    def side(a, b, c):
+        return (c[1] - a[1]) * (b[0] - a[0]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    a, b = s1
+    c, d = s2
+    return (((side(c, d, a) > 0) != (side(c, d, b) > 0))
+            and ((side(a, b, c) > 0) != (side(a, b, d) > 0)))
 
 
 def _candidate_placements():
@@ -468,6 +550,13 @@ def _leader_endpoints(gx, gy, label_bb):
 
 
 def _placement_footprint(placement, gx, gy, w, h):
+    """The rectangle a placed label and its leader draw into.
+
+    This is the *drawn extent*, used to decide which tiles a label spills into
+    (see _bucket_point).  It is deliberately not the collision shape: for a
+    diagonal leader this rectangle is mostly empty, and treating it as occupied
+    is what used to strand labels beside visible free space.
+    """
     anchor, dx, dy, leader = placement
     ax, ay = gx + dx, gy + dy
     label_bb = _anchor_bbox(anchor, ax, ay, w, h)

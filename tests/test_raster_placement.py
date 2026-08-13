@@ -101,12 +101,24 @@ def test_unlabelled_points_still_block_labels():
     assert _dots_covered(points, placements) == []
 
 
+# A row this tight is where the font size starts to decide anything.  It used
+# to be 14px, back when a leader reserved its whole bounding box; measuring the
+# leader itself frees enough ground that a 14px row now labels completely at any
+# size, so the tests that are *about* the size ladder had to move to a row that
+# is genuinely full.  7px apart is a townhouse frontage at z17 (~6 m).
+_LADDER_SPACING = 7.0
+
+
+def _tight_row(n=20, spacing=_LADDER_SPACING):
+    return [(1000.0 + i * spacing, 1000.0, str(2100 + 2 * i), "PELEE BLVD")
+            for i in range(n)]
+
+
 def test_smaller_font_labels_more_of_a_tight_row():
     # Why z17 renders at 9px: the dot spacing shrinks with the zoom but the
     # label footprint does not, so the smaller size is what keeps a dense row
-    # labelled at all.  14px apart is about a z17 suburban run.
-    points = [(1000.0 + i * 14.0, 1000.0, str(2100 + 2 * i), "PELEE BLVD")
-              for i in range(20)]
+    # labelled at all.
+    points = _tight_row()
     _, big_stats = raster._place_labels(points, FONTS)
     _, small_stats = raster._place_labels(points, fonts(9))
     assert small_stats["dropped"] < big_stats["dropped"]
@@ -115,8 +127,7 @@ def test_smaller_font_labels_more_of_a_tight_row():
 def test_shrink_ladder_rescues_what_one_size_would_drop():
     # Same row, but now the ladder is available: points that cannot fit at 11px
     # take a smaller size instead of being dropped.
-    points = [(1000.0 + i * 14.0, 1000.0, str(2100 + 2 * i), "PELEE BLVD")
-              for i in range(20)]
+    points = _tight_row()
     ladder = fonts(11, 9, 8, 7)
     _, fixed = raster._place_labels(points, FONTS)
     placements, laddered = raster._place_labels(points, ladder)
@@ -154,6 +165,113 @@ def test_a_city_can_override_the_per_zoom_font_size():
     assert raster.label_font_size(cfg, 17) == 10     # override beats the default
     assert raster.label_font_size(cfg, 18) == raster.FONT_SIZE
     assert raster.label_font_size(cfg, 19) == 12
+
+
+def _placed_geometry(points, placements, ladder=None):
+    """[(label box, leader segment or None)] for everything actually drawn."""
+    ladder = ladder or FONTS
+    out = []
+    for i, placement in enumerate(placements):
+        if placement is None or not points[i][2]:
+            continue
+        gx, gy, text, _st = points[i]
+        anchor, dx, dy, leader, size = placement
+        bb = raster._anchor_bbox(anchor, gx + dx, gy + dy,
+                                 ladder[size].getlength(text), size)
+        out.append((bb, raster._leader_endpoints(gx, gy, bb) if leader else None))
+    return out
+
+
+def test_segment_hits_box_ignores_the_empty_corners_of_its_bbox():
+    # The whole point of the exact-geometry fix: a diagonal line's bounding box
+    # is mostly empty, and the empty part must stay available.
+    seg = ((0.0, 0.0), (20.0, 20.0))
+    assert raster._segment_hits_box(seg, (8.0, 8.0, 12.0, 12.0))    # on the line
+    assert not raster._segment_hits_box(seg, (14.0, 2.0, 18.0, 6.0))  # bbox only
+    assert not raster._segment_hits_box(seg, (2.0, 14.0, 6.0, 18.0))  # other corner
+
+
+def test_segments_cross_only_on_a_real_x():
+    cross = ((0.0, 0.0), (10.0, 10.0)), ((0.0, 10.0), (10.0, 0.0))
+    assert raster._segments_cross(*cross)
+    # Two leaders leaving the same dot share an endpoint -- not a crossing.
+    shared = ((0.0, 0.0), (10.0, 10.0)), ((0.0, 0.0), (10.0, -10.0))
+    assert not raster._segments_cross(*shared)
+    apart = ((0.0, 0.0), (10.0, 0.0)), ((0.0, 5.0), (10.0, 5.0))
+    assert not raster._segments_cross(*apart)
+
+
+def test_a_leader_never_crosses_a_label_or_another_leader():
+    # The invariant the bbox reservation used to buy the lazy way.  A crowded
+    # grid is where leaders proliferate, so it is the honest place to check.
+    points = [(1000.0 + x * 11.0, 1000.0 + y * 11.0, str(100 + x + 10 * y), "GRID ST")
+              for y in range(8) for x in range(8)]
+    placements, stats = raster._place_labels(points, fonts(11, 9, 8, 7))
+    assert stats["leadered"] > 0, "no leaders drawn -- the check would be vacuous"
+    drawn = _placed_geometry(points, placements, fonts(11, 9, 8, 7))
+    for i, (box, seg) in enumerate(drawn):
+        if seg is None:
+            continue
+        for j, (other_box, other_seg) in enumerate(drawn):
+            if i == j:
+                continue
+            assert not raster._segment_hits_box(seg, other_box), (i, j)
+            if other_seg is not None:
+                assert not raster._segments_cross(seg, other_seg), (i, j)
+
+
+# Four doors of one building, close enough that three of the four labels need
+# leaders.  This is 15-47 HAYS BLVD in miniature: reserving each leader's
+# bounding box costs one of them its number even though the ground it wants is
+# beside the line rather than on it.  Kept as coordinates rather than a
+# generator because the case is a specific arrangement, not a general density --
+# _bbox_leaders below is what makes it a regression test rather than a wish.
+_LEADER_CLUSTER = [
+    (1016.3, 1009.2, "10", "HAYS BLVD"),
+    (1010.4, 1010.3, "11", "HAYS BLVD"),
+    (1023.2, 1002.2, "12", "HAYS BLVD"),
+    (1023.1, 1000.7, "13", "HAYS BLVD"),
+]
+
+
+class _bbox_leaders:
+    """Context manager restoring the pre-fix rule: a leader reserves its bbox."""
+
+    @staticmethod
+    def _bbox(seg):
+        (x0, y0), (x1, y1) = seg
+        return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+    def __enter__(self):
+        self._exact = (raster._segment_hits_box, raster._segments_cross)
+        raster._segment_hits_box = lambda seg, box: raster._boxes_overlap(
+            self._bbox(seg), box)
+        raster._segments_cross = lambda a, b: raster._boxes_overlap(
+            self._bbox(a), self._bbox(b))
+        return self
+
+    def __exit__(self, *exc):
+        raster._segment_hits_box, raster._segments_cross = self._exact
+
+
+def test_space_beside_a_leader_is_usable():
+    ladder = fonts(11, 9, 8, 7)
+    placements, stats = raster._place_labels(_LEADER_CLUSTER, ladder)
+    assert stats["dropped"] == 0
+    assert stats["leadered"] > 0, "no leaders -- the case would prove nothing"
+    assert _dots_covered(_LEADER_CLUSTER, placements, ladder) == []
+
+
+def test_reserving_the_leaders_bbox_is_what_used_to_lose_the_label():
+    # Pins the cause, not just the symptom: flip the rule back and the same
+    # four doors lose one.  If this ever stops failing, the fixture has gone
+    # slack and test_space_beside_a_leader_is_usable is no longer proving
+    # anything about leader geometry.
+    ladder = fonts(11, 9, 8, 7)
+    with _bbox_leaders():
+        _, old = raster._place_labels(_LEADER_CLUSTER, ladder)
+    _, new = raster._place_labels(_LEADER_CLUSTER, ladder)
+    assert old["dropped"] > new["dropped"] == 0
 
 
 def test_dense_cluster_drops_rather_than_overlapping():
