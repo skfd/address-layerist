@@ -64,8 +64,15 @@ racing or erroring).
 
 - **Slim/MVT schema is derived** from canonical `[fields]`
   (`number->housenumber`, `street->street`, `full->addr`, `unit->unit`,
-  `name=housenumber` for iD), so raster/vector need no per-city code. Extra
+  `name=`the label, for iD), so raster/vector need no per-city code. Extra
   source props ship via `[layer].mvt_extra`.
+- **One label rule for both layers** (`label.py`): the suffix is folded into the
+  number (`335A`), then a unit leads it (`3-2280`). Both dimensions distinguish
+  addresses that otherwise draw identically -- a townhouse block renders as
+  `2280` repeated without the unit, and 335 collides with 335A without the
+  suffix. `suffix` is consumed into `housenumber` rather than emitted as its own
+  key, because `mvt_extra` shares that key space (Toronto passes through a
+  `suffix` tag whose value is already inside its number).
 - **Slim sanity is source-relative:** fail if fewer than 95% of the input features
   survive (no per-city magic count bounds).
 

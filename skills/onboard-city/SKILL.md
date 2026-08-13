@@ -41,11 +41,31 @@ under `[fields]` (canonical name -> SOURCE_PROPERTY):
 - `number` -- the house/civic number (REQUIRED; the raster labeller needs it).
 - `street` -- the full street name (incl. type/direction if combined).
 - `unit`   -- unit/suite, if present.
+- `suffix` -- the house-number suffix (`A`, `B`, `1/2`), if it is a separate
+  column. Folded into the number (`335` + `A` -> `335A`); never emitted as its
+  own key.
 - `full`   -- the full single-line address, if present.
 
 Only `number` is strictly required. Components you don't map still ship inside
 the vector tiles only if you add them to `[layer].mvt_extra`
 (`SOURCE_PROP = "shortkey"`); otherwise they are dropped from the slim output.
+
+**Map `unit` and `suffix` whenever the source has them.** They are the two
+columns that distinguish addresses drawing at the same spot, and a label missing
+either renders distinct buildings identically: a townhouse block becomes one
+street number repeated per door, and 335 becomes indistinguishable from 335A.
+Across the Ontario registry, 31 of 41 sources publish a unit column and ~15
+publish a separate suffix -- assume yours does until you have checked the field
+list. Two traps worth a `returnCountOnly` probe each:
+
+- **The number may already contain the suffix.** Toronto's `ADDRESS_NUMBER`
+  reads `246A` *and* it publishes `LO_NUM_SUF = A`; mapping both would be
+  harmless here (the engine detects it) but the column is better left as an
+  `mvt_extra` tag when the number is already combined.
+- **The unit column may be a flag, not a value** -- Greater Sudbury's
+  `UNIT_OR_AMENITY` holds the literal word `Unit`, and Kingston's `UNIT_TYPE`
+  holds `BASE`/`UNIT`. Mapping one of those puts noise in every label. Check the
+  distinct values before mapping.
 
 ## 3. Confirm size, licence, attribution
 
@@ -77,6 +97,7 @@ license_name = "Open Government Licence - Town of Oakville"
 number = "STREET_NUM"
 street = "SNAME"
 unit   = "UNIT"
+suffix = "SUFFIX"
 full   = "ADDRESS"
 
 [layer]

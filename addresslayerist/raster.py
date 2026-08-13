@@ -13,8 +13,8 @@ other labels.  If even the outer rings collide, the label is dropped.
 Placement is run once globally per zoom so seam-straddling labels render in the
 same slot in every tile they touch.
 
-Street identity is conveyed by colour: hash(street_name) -> stable hue.  House
-number labels and their leader lines use that colour.  In every tile, each
+Street identity is conveyed by colour: hash(street_name) -> stable hue.  Address
+labels and their leader lines use that colour.  In every tile, each
 street that has at least STREET_LABEL_MIN_DOTS dots gets one floating street
 name label placed in free space, in the same colour, so the dot and the name
 are visually linked even when several streets meet at a corner.
@@ -28,6 +28,7 @@ from collections import defaultdict
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .label import display_label
 from .tilemath import TILE_SIZE, lonlat_to_pixel
 
 DOT_COLOR = (224, 33, 138, 255)        # magenta -- visible over aerial imagery
@@ -139,8 +140,8 @@ def _render_zoom(cfg, slim_path, zoom, font, street_font, label_zooms):
 
     print(f"Raster z{zoom}: bucketing into tiles ...")
     tiles = defaultdict(list)
-    for (gx, gy, hn, st), placement in zip(points, placements):
-        _bucket_point(tiles, gx, gy, hn, st, placement, font)
+    for (gx, gy, text, st), placement in zip(points, placements):
+        _bucket_point(tiles, gx, gy, text, st, placement, font)
 
     out_dir = os.path.join(cfg.raster_tile_dir, str(zoom))
     print(f"Raster z{zoom}: rendering {len(tiles):,} tiles (labels={label}) ...")
@@ -157,17 +158,22 @@ def _render_zoom(cfg, slim_path, zoom, font, street_font, label_zooms):
 
 
 def _read_points(slim_path, zoom):
-    """Return [(gx, gy, housenumber, street), ...] in zoom-level pixels."""
+    """Return [(gx, gy, label, street), ...] in zoom-level pixels.
+
+    The label is the housenumber with the unit in front when there is one
+    ("3-2280") -- see label.py.  Without it a townhouse block renders as the
+    same street number repeated once per unit.
+    """
     points = []
     with open(slim_path, encoding="utf-8") as f:
         for line in f:
             feat = json.loads(line)
             lon, lat = feat["geometry"]["coordinates"]
             props = feat["properties"]
-            hn = props.get("housenumber", "")
+            text = display_label(props.get("housenumber"), props.get("unit"))
             st = props.get("street", "")
             gx, gy = lonlat_to_pixel(lon, lat, zoom)
-            points.append((gx, gy, hn, st))
+            points.append((gx, gy, text, st))
     return points
 
 
@@ -217,10 +223,10 @@ def _place_labels(points, font):
     stats = {"inner": 0, "leadered": 0, "dropped": 0}
     order = sorted(range(len(points)), key=lambda i: (points[i][1], points[i][0]))
     for i in order:
-        gx, gy, hn, _st = points[i]
-        if not hn:
+        gx, gy, text, _st = points[i]
+        if not text:
             continue
-        w = text_w(hn)
+        w = text_w(text)
         for placement in _candidate_placements():
             box = _placement_footprint(placement, gx, gy, w)
             if not collides(box):
@@ -299,12 +305,12 @@ def _placement_footprint(placement, gx, gy, w):
     return (x0 - pad, y0 - pad, x1 + pad, y1 + pad)
 
 
-def _bucket_point(tiles, gx, gy, hn, st, placement, font):
+def _bucket_point(tiles, gx, gy, text, st, placement, font):
     half = DOT_RADIUS + STROKE_WIDTH
     x0, y0, x1, y1 = gx - half, gy - half, gx + half, gy + half
-    if placement is not None and hn:
+    if placement is not None and text:
         bx0, by0, bx1, by1 = _placement_footprint(
-            placement, gx, gy, font.getlength(hn)
+            placement, gx, gy, font.getlength(text)
         )
         x0, y0 = min(x0, bx0), min(y0, by0)
         x1, y1 = max(x1, bx1), max(y1, by1)
@@ -313,7 +319,7 @@ def _bucket_point(tiles, gx, gy, hn, st, placement, font):
     for tx in range(tx0, tx1 + 1):
         for ty in range(ty0, ty1 + 1):
             tiles[(tx, ty)].append(
-                (gx - tx * TILE_SIZE, gy - ty * TILE_SIZE, hn, st, placement)
+                (gx - tx * TILE_SIZE, gy - ty * TILE_SIZE, text, st, placement)
             )
 
 
@@ -325,12 +331,12 @@ def _render_tile(entries, font, street_font, draw_street):
     occupied = []  # bboxes (x0, y0, x1, y1) that floating street labels avoid
 
     # Leader lines first so dots cover their endpoints cleanly.
-    for ox, oy, hn, st, placement in entries:
-        if placement is None or not hn or not placement[3]:
+    for ox, oy, text, st, placement in entries:
+        if placement is None or not text or not placement[3]:
             continue
         anchor, dx, dy, _ = placement
         ax, ay = ox + dx, oy + dy
-        label_bb = _anchor_bbox(anchor, ax, ay, font.getlength(hn), FONT_SIZE)
+        label_bb = _anchor_bbox(anchor, ax, ay, font.getlength(text), FONT_SIZE)
         (sx, sy), (ex, ey) = _leader_endpoints(ox, oy, label_bb)
         draw.line([(sx, sy), (ex, ey)],
                   fill=_color_of(color_map, st), width=LEADER_WIDTH)
@@ -345,16 +351,16 @@ def _render_tile(entries, font, street_font, draw_street):
                          ox + DOT_RADIUS, oy + DOT_RADIUS))
 
     # House number labels -- tinted by street.
-    for ox, oy, hn, st, placement in entries:
-        if placement is None or not hn:
+    for ox, oy, text, st, placement in entries:
+        if placement is None or not text:
             continue
         anchor, dx, dy, _ = placement
         ax, ay = ox + dx, oy + dy
         draw.text(
-            (ax, ay), hn, font=font, fill=_color_of(color_map, st),
+            (ax, ay), text, font=font, fill=_color_of(color_map, st),
             stroke_width=STROKE_WIDTH, stroke_fill=HALO_COLOR, anchor=anchor,
         )
-        bb = _anchor_bbox(anchor, ax, ay, font.getlength(hn), FONT_SIZE)
+        bb = _anchor_bbox(anchor, ax, ay, font.getlength(text), FONT_SIZE)
         occupied.append((bb[0] - STROKE_WIDTH, bb[1] - STROKE_WIDTH,
                          bb[2] + STROKE_WIDTH, bb[3] + STROKE_WIDTH))
 
@@ -375,7 +381,7 @@ def _draw_street_labels(draw, entries, street_font, occupied, color_map):
     # Group by street, but only count dots whose centre is inside the tile so
     # we don't promote spillover entries.
     by_street = defaultdict(list)
-    for ox, oy, _hn, st, _pl in entries:
+    for ox, oy, _text, st, _pl in entries:
         if not st:
             continue
         if 0 <= ox < TILE_SIZE and 0 <= oy < TILE_SIZE:

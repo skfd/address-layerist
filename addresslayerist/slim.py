@@ -7,11 +7,22 @@ the shared input to both tile builders.
 Output property keys are DERIVED from the canonical field map, so every city
 yields the same schema and the raster/vector code needs no per-city changes:
 
-    canonical number -> housenumber   (also mirrored to `name` for iD labels)
+    canonical number -> housenumber
     canonical street -> street
     canonical full   -> addr
     canonical unit   -> unit
+    canonical suffix -> folded into housenumber ("335" + "A" -> "335A")
     [layer].mvt_extra -> extra source-prop -> short-key pairs (e.g. Toronto class)
+
+The suffix is folded in here rather than carried as its own short key on
+purpose: `mvt_extra` shares this key space, and Toronto already publishes a
+passthrough tag named `suffix` whose value is *already* inside its number. A
+downstream consumer reading a `suffix` key could not tell the two apart, so the
+one place that knows the difference -- the canonical field map, right here --
+resolves it once.
+
+`name` is the label text, not a bare housenumber: a unit, when present, leads it
+("3-2280") so a townhouse block doesn't read as one number repeated. See label.py.
 
 The meta sidecar records the feature count and lon/lat bbox (the site uses the
 bbox midpoint to centre its preview map).
@@ -22,6 +33,8 @@ import os
 
 import ijson
 
+from .label import display_label, housenumber
+
 # canonical field name -> slim/MVT short key
 _CANON_TO_SHORT = {
     "number": "housenumber",
@@ -29,6 +42,11 @@ _CANON_TO_SHORT = {
     "full": "addr",
     "unit": "unit",
 }
+
+# Canonical fields that are consumed into another key instead of being emitted
+# under one of their own. Kept out of _CANON_TO_SHORT so the slim schema stays
+# exactly the set of keys above.
+_CANON_SUFFIX = "suffix"
 
 # Slim should keep ~every feature; only geometry-less / out-of-range points drop.
 # Replaces per-city absolute count bounds with a source-relative sanity check.
@@ -46,6 +64,14 @@ def _property_map(cfg):
     return out
 
 
+def _text(val):
+    """Source value as clean text, or "" for the ways a source says 'absent'."""
+    if val is None:
+        return ""
+    text = str(val).strip()
+    return "" if text == "None" else text
+
+
 def slim(cfg, src_path):
     """Stream ``src_path`` into ``cfg.slim_path`` (+ meta). Returns the slim path."""
     print(f"Slimming {src_path} ...")
@@ -57,6 +83,7 @@ def slim(cfg, src_path):
             "No 'number' field is mapped, but the raster labeller needs "
             "housenumber. Set [fields].number in layer.toml."
         )
+    suffix_src = cfg.fields.get(_CANON_SUFFIX)
 
     count = skipped = 0
     min_lon = min_lat = float("inf")
@@ -72,16 +99,19 @@ def slim(cfg, src_path):
             props_in = feature.get("properties") or {}
             props_out = {}
             for src_key, out_key in prop_map.items():
-                val = props_in.get(src_key)
-                if val is None or val == "":
-                    continue
-                text = str(val).strip()
-                if text and text != "None":
+                text = _text(props_in.get(src_key))
+                if text:
                     props_out[out_key] = text
+            if suffix_src and "housenumber" in props_out:
+                props_out["housenumber"] = housenumber(
+                    props_out["housenumber"], _text(props_in.get(suffix_src))
+                )
             # iD's Custom Map Data draws labels from a feature's `name` property,
-            # so mirror the housenumber there to match the raster layer.
-            if "housenumber" in props_out:
-                props_out["name"] = props_out["housenumber"]
+            # so mirror the display label there to match the raster layer.
+            label = display_label(props_out.get("housenumber"),
+                                  props_out.get("unit"))
+            if label:
+                props_out["name"] = label
             out.write(json.dumps({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [lon, lat]},
