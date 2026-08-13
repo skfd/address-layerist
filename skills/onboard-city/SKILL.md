@@ -110,8 +110,11 @@ pages_url    = "https://<account>.github.io/oakville-address-layer"
 dataset_page = "https://...open-data-page..."
 attribution  = "(c) Town of Oakville, Open Government Licence"
 country_code = "CA"
-# vector_minzoom/maxzoom, raster_zooms, raster_label_zooms, layer_name,
-# wsl_distro, mvt_extra, expected_min all have sensible defaults -- only set to override.
+# vector_minzoom/maxzoom, raster_zooms, raster_label_zooms, raster_font_sizes,
+# layer_name, wsl_distro, mvt_extra, expected_min all have sensible defaults --
+# only set to override. raster_font_sizes is { zoom = px } and shrinks the label
+# font at a crowded zoom (the engine already renders z17 at 9px); a city denser
+# than Oakville may want e.g. { 17 = 9, 18 = 9 }.
 # boundary/description/privacy_policy_url/eli_id/eli_category tune the Editor
 # Layer Index entry (step 8); all optional.
 ```

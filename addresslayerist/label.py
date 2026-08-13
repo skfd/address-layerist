@@ -17,8 +17,16 @@ townhouses because the varying part is on the left:
     number 335,  suffix A  ->  "335A"
     number 2280            ->  "2280"
 
-Both tile builders go through here so the raster labels and the vector `name`
-property (what iD draws) never disagree.
+Both tile builders go through here, so the raster labels and the vector `name`
+property (what iD draws) agree wherever a full label is drawn.
+
+One deliberate exception: in a complex too crowded for the full labels to fit --
+MIN_COMPLEX_DOORS or more doors sharing one street number -- the raster falls
+back to drawing the bare unit and spelling the street number out once, in
+colour, beside the cluster (see raster.py).  The vector `name` keeps the full
+"3-2441" there, because it is read by click-to-inspect and by iD's own
+labeller, neither of which has that anchor label to lean on.  The two disagree
+in that one place on purpose, and only where the alternative is a missing label.
 """
 
 

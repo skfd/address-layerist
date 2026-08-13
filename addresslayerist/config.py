@@ -59,6 +59,9 @@ class Config:
     vector_maxzoom: int = 19
     raster_zooms: list = field(default_factory=lambda: [16, 17, 18, 19])
     raster_label_zooms: list = field(default_factory=lambda: [17, 18, 19])
+    # zoom -> label font size, overriding the engine's per-zoom defaults. Only
+    # worth setting for a city whose density differs a lot from the norm.
+    raster_font_sizes: dict = field(default_factory=dict)
     mvt_extra: dict = field(default_factory=dict)  # extra source prop -> short key
     expected_min: int = 0                # optional absolute floor for slim count
 
@@ -197,6 +200,9 @@ def load(path="layer.toml", project_dir=None):
         vector_maxzoom=layer.get("vector_maxzoom", 19),
         raster_zooms=layer.get("raster_zooms", [16, 17, 18, 19]),
         raster_label_zooms=layer.get("raster_label_zooms", [17, 18, 19]),
+        # TOML table keys are strings ({ 17 = 9 }); zooms are ints everywhere else.
+        raster_font_sizes={int(z): int(s)
+                           for z, s in layer.get("raster_font_sizes", {}).items()},
         mvt_extra=layer.get("mvt_extra", {}),
         expected_min=layer.get("expected_min", 0),
         project_dir=project_dir,
