@@ -5,6 +5,7 @@ tiles for OpenStreetMap editors:
 
 - **Vector tiles** (MVT) -- interactive in iD; click a point for its address tags.
 - **Raster tiles** (PNG) -- house numbers drawn as text; a readable JOSM backdrop.
+  Optionally rendered deeper until no address is left unlabelled.
 - A **landing page** with copy-paste "add this layer" instructions, published to
   GitHub Pages.
 
@@ -103,6 +104,36 @@ racing or erroring).
   waiting to be zoomed into. Stacked is almost always a source problem (a tower's
   doors on one centroid) and unlabelled a density one; the build only reports
   them, it never fails on them.
+
+- **A leader reserves its line, not its bounding box** (`raster.py`). A label
+  reserves the rectangle it draws into; the thin line joining a label to its dot
+  reserves only itself. The two are collided as box-vs-box, box-vs-segment and
+  segment-vs-segment, so the guarantees still hold -- no label over another
+  address's dot, no leader through another label -- while the empty corners of a
+  diagonal leader's bounding box stay available. They are most of that
+  rectangle: reserving them cost Oakville 39 labels at z19 and all 5 of its z20
+  drops, and produced the visible symptom of a number missing beside obvious
+  white space.
+- **Completeness is bought by the zoom, not by the tile** (`deep.py`). Set
+  `[layer].raster_complete_to` and the build keeps adding deeper zooms until the
+  audit finds nothing unlabelled, stopping as soon as it is clean (Oakville: z19
+  leaves 57, z20 labels all of them, so it stops there). Those zooms are
+  ordinary members of the raster layer -- same URL, same advertised range,
+  **rendered whole**. Rendering only the few tiles that hold the stragglers is
+  ~300 KB instead of ~104 MB and does not work: a client that meets a 404 draws
+  nothing rather than scaling the parent up (Leaflet's `_tileReady` marks the
+  failed tile active, so `_pruneTiles` drops the parent it was showing), so a
+  sparse zoom blanks the map everywhere it has no tile -- exactly when a mapper
+  zooms in. Hence the size, hence per-city: a published site can approach the
+  Pages limit, so a big city may prefer to stop earlier and live with a residual.
+- **The zoom range is read from the tiles, not the config** (`built_raster_zooms`).
+  A completion zoom only exists if it was needed, so the landing page, the JOSM
+  `tms[..]` snippet and the ELI entry all advertise what was published.
+- **A marker box says "there is more here"**. Where a zoom cannot label
+  everything, it draws a dashed box around the ground whose numbers appear one
+  zoom deeper. The boxes are the outline of their *union*: a crowded block needs
+  several neighbouring tiles at once, and one box per tile turns the parent into
+  a lattice that reads as debug output.
 
 ## Requirements
 

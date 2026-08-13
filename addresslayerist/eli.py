@@ -71,8 +71,11 @@ def build_eli(cfg):
         "type": "tms",
         "category": cfg.eli_category,
         "url": f"{cfg.pages_url}/tiles/raster/{{zoom}}/{{x}}/{{y}}.png",
-        "min_zoom": min(cfg.raster_zooms),
-        "max_zoom": max(cfg.raster_zooms),
+        # The zooms actually published, which includes any completion zoom the
+        # build added: advertising less would leave the deepest tiles unfetched,
+        # advertising more would send editors to tiles that do not exist.
+        "min_zoom": min(cfg.built_raster_zooms),
+        "max_zoom": max(cfg.built_raster_zooms),
         # Labels on transparent tiles: an overlay, never a background layer.
         "overlay": True,
         "description": cfg.description or _description(cfg),

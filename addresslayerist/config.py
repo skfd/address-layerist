@@ -59,6 +59,14 @@ class Config:
     vector_maxzoom: int = 19
     raster_zooms: list = field(default_factory=lambda: [16, 17, 18, 19])
     raster_label_zooms: list = field(default_factory=lambda: [17, 18, 19])
+    # Keep rendering deeper raster zooms until every address carries a label,
+    # up to this zoom; 0 disables it. The zooms are ordinary members of the
+    # raster layer -- rendered whole, served from the same URL, advertised in
+    # the same zoom range -- because a client that meets a missing tile shows
+    # blank rather than the parent scaled up, so a partly-filled zoom would
+    # blank the map everywhere it has no tile. That makes this a size decision,
+    # hence per-city: a published site can approach GitHub Pages' ~1 GB limit.
+    raster_complete_to: int = 0
     # zoom -> label font size, overriding the engine's per-zoom defaults. Only
     # worth setting for a city whose density differs a lot from the norm.
     raster_font_sizes: dict = field(default_factory=dict)
@@ -132,6 +140,26 @@ class Config:
         return os.path.join(self.site_dir, "tiles", "raster")
 
     @property
+    def completion_zooms(self):
+        """Zooms available past raster_zooms for finishing off the labels."""
+        if not self.raster_complete_to:
+            return []
+        return list(range(max(self.raster_zooms) + 1, self.raster_complete_to + 1))
+
+    @property
+    def built_raster_zooms(self):
+        """Zooms actually on disk, so the site advertises what it published.
+
+        A completion zoom is only rendered if there was something left to label,
+        so the range is not knowable from the config alone.
+        """
+        if not os.path.isdir(self.raster_tile_dir):
+            return sorted(self.raster_zooms)
+        built = sorted(int(name) for name in os.listdir(self.raster_tile_dir)
+                       if name.isdigit())
+        return built or sorted(self.raster_zooms)
+
+    @property
     def eli_dir(self):
         # Outside site_dir on purpose: an index submission is a one-off file to
         # PR elsewhere, not something to publish with the tiles.
@@ -200,6 +228,7 @@ def load(path="layer.toml", project_dir=None):
         vector_maxzoom=layer.get("vector_maxzoom", 19),
         raster_zooms=layer.get("raster_zooms", [16, 17, 18, 19]),
         raster_label_zooms=layer.get("raster_label_zooms", [17, 18, 19]),
+        raster_complete_to=layer.get("raster_complete_to", 0),
         # TOML table keys are strings ({ 17 = 9 }); zooms are ints everywhere else.
         raster_font_sizes={int(z): int(s)
                            for z, s in layer.get("raster_font_sizes", {}).items()},

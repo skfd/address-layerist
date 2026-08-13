@@ -1,65 +1,65 @@
 # TODO
 
-## Deep zoom for the last few dense addresses (undecided)
+## Deep zoom for the last few dense addresses (decided, done)
 
-**Where it stands.** After the #2 collision fix, the per-zoom font size, the
-shrink ladder and complex-as-street, Oakville still leaves **96 of 71,049**
-addresses unlabelled at z19 (the max raster zoom). They are concentrated in a
-handful of apartment blocks -- POST RD, HAYS BLVD, GREENWICH DR, SIXTH LINE --
-where doors are ~4-6px apart at z19.
+**What it was.** Oakville left 96 of 71,049 addresses unlabelled at z19, the max
+raster zoom, concentrated in a few apartment blocks where doors are 4-6px apart.
+Since editors upscale past the deepest zoom, a label dropped there is invisible
+at *every* zoom of the raster layer. The measured options were all bad: a
+complete z20 cost +104 MB for ~17 remaining, a complete z21 +200 MB for zero.
 
-z19 is the last rendered zoom and the ELI entry advertises `max_zoom: 19`, so
-editors upscale past it. A label dropped at z19 is therefore invisible at
-*every* zoom in the raster layer. The vector layer is unaffected: it carries all
-71,049 features with their `name` at z19 (verified by decoding the mbtiles) and
-overzooms client-side, so nothing is permanently hidden there.
+**What it actually was.** Most of those 96 were not a density limit at all. A
+leadered label reserved the axis-aligned bounding box of {label + leader}, and a
+diagonal leader's bbox is mostly empty -- for one case, 329px2 reserved against
+154px2 of ink. Neighbouring labels were being turned away from ground that was
+visibly free. Colliding the leader as the *segment* it is took z19 from 96
+unlabelled to 57 and z20 from 5 to zero, and cut shrunken labels from 95 to 32.
+The old sizing table was measuring a bug.
 
-Every build now measures this residual itself: the deepest zoom runs the
-hidden-address check (`audit.py`) and writes `build/<slug>-hidden-z19.csv`, so
-"which 96" is a file to open rather than a thing to re-derive. It also separates
-the two causes -- addresses *stacked* on one coordinate stay hidden at z20 and
-z21 too, so they are not part of what a deeper zoom would buy.
+**Why the sparse version was dropped.** The first cut rendered only the 36 tiles
+that hold the stragglers -- 300 KB against 104 MB -- and published them as a
+separate opt-in overlay. It was rejected on the grounds that mappers should not
+have to add a second layer to see addresses: zooming in should just show them.
+Folding a *sparse* zoom into the main layer is not an option, and this is
+settled rather than assumed. Leaflet 1.9.4 `_tileReady` marks a failed tile
+`loaded` and `active`, then calls `_pruneTiles`, whose `_retainParent` only runs
+for tiles that are `current && !active` -- so a 404 child does not keep the
+parent it was scaling up, and the area goes blank. A partly-filled zoom would
+blank the map everywhere it had no tile.
 
-**Measured options** (Oakville, before complex-as-street; re-measure before
-acting -- the residual is smaller now):
+**What shipped.**
 
-| max raster zoom | unlabelled | tiles added | size added |
-| --------------- | ---------- | ----------- | ---------- |
-| z19 (today)     | 96         | --          | --         |
-| z20             | ~17-20     | +45,501     | +104 MB    |
-| z21             | 0          | +114,930    | +200 MB    |
+- Exact leader geometry in `_place_labels` (box-vs-box, box-vs-segment,
+  segment-vs-segment). Same invariants, more room.
+- `[layer].raster_complete_to`: keep rendering deeper zooms, whole, until the
+  audit finds nothing unlabelled. Stops as soon as it is clean, and drops a
+  trailing zoom that rescues nobody (two doors on one coordinate).
+- The published zoom range is read from the tiles on disk, so the landing page,
+  the JOSM snippet and the ELI entry advertise what exists.
+- A dashed marker box where a zoom cannot show everything, drawn as the outline
+  of the union of adjacent tiles.
 
-Shrinking below 7px and adding wider leader rings were both tried and rejected:
-they move z20 from 20 to 17 and z19 from 154 to 149. Zero requires z21.
+**Oakville today:** z16-20, 73,702 tiles, 273 MB (z20 alone is 45,500 tiles and
+104 MB). Zero unlabelled addresses. 30 addresses are still *stacked* -- two
+doors on one coordinate -- which no zoom separates and which `audit.py` reports
+as the source problem it is.
 
-**The sparse idea, and why it is not one layer.** Only **58** of 41,166 z20
-tiles contain a point unresolved at z19 (0.14%); at z21, **17** of 60,205
-(0.03%). So the useful deep tiles number ~75, not ~115,000. But XYZ clients do
-not fall back to a parent tile when a child 404s, and the zoom range is
-advertised once (ELI `max_zoom`, JOSM `tms[min,max]`, Leaflet `maxNativeZoom`).
-Ship a sparse pyramid under the same URL and every *other* area goes blank at
-z20+ -- addresses vanish exactly when a mapper zooms in. Strictly worse than
-today.
+**Still open:**
 
-**The form that does work: a second, opt-in detail layer.** Publish the ~75 deep
-tiles under their own URL, documented on the site next to the existing vector
-and raster URLs (not a second ELI entry). It composes unusually well because in
-exactly those spots the main layer has *no* labels -- they are the dropped ones
--- so the overlay adds the missing numbers rather than duplicating anything.
-Only the dots double up (blurry upscaled + crisp); having the detail tiles draw
-labels and leaders only would avoid that.
-
-**Open decision:**
-
-- complete z20 (+104 MB, ~17 left, works for everyone, no discovery step), or
-- complete z20 + z21 (+200 MB, zero left, automatic), or
-- complete z20 + sparse z21 detail layer (+104 MB, zero left, opt-in), or
-- leave z19 as the max and treat the vector layer as the complete view.
-
-**Constraint that matters for other cities:** a published site can approach
-GitHub Pages' ~1 GB limit already -- Toronto is ~1 GB, ~94% of it raster (see
-README). Whatever is chosen should be a per-city `layer.toml` setting, not an
-engine-wide default, or Toronto cannot adopt it.
+- Not verified in JOSM or iD on the real site. Nothing here should surprise
+  them -- it is an ordinary zoom range now -- but nobody has walked it.
+- Toronto cannot afford this: it is already ~1 GB, ~94% raster, and a z20 would
+  roughly double it against Pages' ~1 GB limit. It stays at `raster_complete_to
+  = 0` and keeps its residual. If that becomes unacceptable, the sparse tiles +
+  a client that falls back to the parent is the design to revisit -- the
+  machinery for rendering only selected tiles is still in `_render_tiles`.
+- A denser candidate set (16 compass directions instead of 8) measured a further
+  57 -> 11 at z19 on top of exact leaders, at the cost of doubling leader lines
+  (316 -> 624). Not adopted, but for a city that cannot afford a completion zoom
+  it is the cheapest remaining lever.
+- Placement is greedy in north-to-south order, so a slot goes to whoever asks
+  first rather than to whoever has fewest options. Placing most-constrained
+  points first might beat both of the above without adding a single slot.
 
 ## Smaller follow-ups
 
@@ -74,5 +74,9 @@ engine-wide default, or Toronto cannot adopt it.
   complex dominates. Probably correct; confirm it reads well.
 - Crowding is decided per zoom, so a complex can be drawn with full labels at
   z19 and unit numbers at z18. That is the intended behaviour (each zoom shows
-  the most it can), but it means the same building reads differently as you
-  zoom. Worth a look before assuming it is fine.
+  the most it can), but the detail layer makes it sharper: a mapper who follows
+  a marker box from z19 into z20 crosses that boundary deliberately, and the
+  same building can read "13" on one side of it and "13-3025" on the other.
+- The build never deletes tiles, so a zoom that renders fewer tiles than a
+  previous run leaves the extras on disk and publishes them. Harmless today
+  (they are stale but valid), and it predates the detail layer.

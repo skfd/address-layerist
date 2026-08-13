@@ -58,7 +58,7 @@ from collections import defaultdict
 
 from PIL import Image, ImageDraw, ImageFont
 
-from . import audit
+from . import audit, deep
 from .label import display_label
 from .tilemath import TILE_SIZE, lonlat_to_pixel
 
@@ -84,6 +84,17 @@ LABEL_GAP = 2                          # gap between the dot and the inner label
 LEADER_WIDTH = 1
 LEADER_R1 = 16.0                       # first fallback ring radius (px)
 LEADER_R2 = 28.0                       # second fallback ring radius (px)
+
+# Marker: a dashed box around ground holding addresses this zoom cannot label
+# but the next one down can -- "there is more here than fits, zoom in".  Same
+# magenta as the dots, so it reads as this layer's own signal rather than as
+# something in the imagery underneath.  See deep.py.
+MARKER_COLOR = DOT_COLOR
+MARKER_HALO = (255, 255, 255, 220)
+MARKER_WIDTH = 1
+MARKER_HALO_WIDTH = 3
+# How many rescued addresses to name in the build log before summarising.
+_COMPLETION_REPORT_LIMIT = 12
 
 # Floating street-name labels (per tile, per street).
 STREET_FONT_SIZE = 12
@@ -191,27 +202,181 @@ def _color_of(color_map, name):
 
 
 def build_raster(cfg):
-    """Render PNG tiles for every zoom in cfg.raster_zooms.
+    """Render PNG tiles for every zoom in cfg.raster_zooms, then any completion
+    zooms needed to leave no address unlabelled (see cfg.raster_complete_to).
 
     Returns a dict {zoom: tile_count}.
     """
     slim_path = cfg.slim_path
     if not os.path.isfile(slim_path):
         raise RuntimeError(f"Slim GeoJSONL not found: {slim_path}. Run 'slim' first.")
-    label_path = cfg.asset(os.path.join("font", "DejaVuSans.ttf"))
     street_font = ImageFont.truetype(
         cfg.asset(os.path.join("font", "DejaVuSans-Bold.ttf")), STREET_FONT_SIZE
     )
     label_zooms = set(cfg.raster_label_zooms)
-    fonts = {z: {s: ImageFont.truetype(label_path, s) for s in font_ladder(cfg, z)}
-             for z in cfg.raster_zooms}
+    fonts = {z: _fonts_for(cfg, z) for z in cfg.raster_zooms}
     # The hidden-address check only means something at the deepest zoom: that is
     # the last tile a client fetches, so what is unreadable there is unreadable
     # everywhere.  See audit.py.
     deepest = max(cfg.raster_zooms, default=None)
-    return {z: _render_zoom(cfg, slim_path, z, fonts[z], street_font, label_zooms,
-                            check_hidden=(z == deepest))
-            for z in cfg.raster_zooms}
+    counts = {z: _render_zoom(cfg, slim_path, z, fonts[z], street_font, label_zooms)
+              for z in cfg.raster_zooms if z != deepest}
+    if deepest is None:
+        return counts
+
+    # The deepest zoom is rendered last and by hand, because what it draws
+    # depends on what the detail layer will rescue: the marker boxes have to be
+    # known before the tile is drawn, or the street-name placer cannot avoid
+    # them.
+    labelled = deepest in label_zooms
+    points, placements, rows = _place_zoom(cfg, slim_path, deepest, fonts[deepest],
+                                           labelled)
+    audit.report(cfg, deepest, rows, points, placements, labelled,
+                 stack_distance=2.0 * DOT_RADIUS)
+    levels = _completion_levels(cfg, slim_path, points, placements)
+    markers = (deep.markers_for(levels[0].cells, levels[0].zoom, deepest)
+               if levels else {})
+    out_dir = os.path.join(cfg.raster_tile_dir, str(deepest))
+    print(f"Raster z{deepest}: rendering tiles (labels={labelled}) ...")
+    counts[deepest] = _render_tiles(points, placements, fonts[deepest], street_font,
+                                    labelled, markers, out_dir)
+    counts.update(_render_completion(cfg, levels, street_font, rows))
+    return counts
+
+
+def _fonts_for(cfg, zoom):
+    label_path = cfg.asset(os.path.join("font", "DejaVuSans.ttf"))
+    return {s: ImageFont.truetype(label_path, s) for s in font_ladder(cfg, zoom)}
+
+
+class _Level:
+    """One completion zoom: what it draws, and which tiles hold the stragglers."""
+
+    def __init__(self, zoom, cells, points, placements, fonts, rescued):
+        self.zoom = zoom
+        self.cells = cells              # {(tx, ty): [address index, ...]}
+        self.points = points
+        self.placements = placements
+        self.fonts = fonts
+        self.rescued = rescued          # indices this zoom labels for the first time
+
+
+def _completion_levels(cfg, slim_path, base_points, base_placements):
+    """Plan the zooms needed to finish labelling, one _Level each.
+
+    Each level is an ordinary zoom of the raster layer and is rendered whole --
+    a partly-filled zoom is not an option, because a client that meets a missing
+    tile draws nothing rather than scaling the parent up, so the city would go
+    blank everywhere the zoom had no tile.  What is sparse is only the *marker*:
+    ``cells`` records which tiles hold addresses this zoom is being rendered
+    for, so the zoom above can point at them.
+
+    Trailing levels that rescue nobody are dropped -- that is the signature of
+    two doors on one coordinate, which no zoom parts, and rendering a whole
+    extra zoom of the city for them would buy nothing at all.
+    """
+    zooms = cfg.completion_zooms
+    pending = [i for i, p in enumerate(base_placements)
+               if p is None and base_points[i][2]]
+    if not zooms or not pending:
+        return []
+
+    levels = []
+    for zoom in zooms:
+        if not pending:
+            break
+        fonts = _fonts_for(cfg, zoom)
+        print(f"Raster z{zoom}: placing for {len(pending):,} unlabelled "
+              f"address{'' if len(pending) == 1 else 'es'} ...")
+        points, complexes, _rows = _read_points(slim_path, zoom)
+        points, placements, _stats, _crowded = _place_complexes(
+            points, complexes, fonts)
+        # Reading again at this zoom keeps index i the same address -- the slim
+        # file is read in order -- so the pending list carries across zooms.
+        cells = deep.cells_for(points, pending, zoom, zoom)
+        rescued = [i for i in pending if placements[i] is not None]
+        levels.append(_Level(zoom, cells, points, placements, fonts, rescued))
+        pending = [i for i in pending if placements[i] is None]
+    while levels and not levels[-1].rescued:
+        levels.pop()
+    return levels
+
+
+def _render_completion(cfg, levels, street_font, rows):
+    """Render each completion zoom in full; return {zoom: tile_count}."""
+    counts = {}
+    for n, level in enumerate(levels):
+        # A level marks the level below it, so a mapper who follows one box
+        # finds the next one waiting rather than a dead end.
+        markers = {}
+        if n + 1 < len(levels):
+            deeper = levels[n + 1]
+            markers = deep.markers_for(deeper.cells, deeper.zoom, level.zoom)
+        out_dir = os.path.join(cfg.raster_tile_dir, str(level.zoom))
+        print(f"Raster z{level.zoom}: rendering tiles for "
+              f"{len(level.rescued):,} addresses the zoom above cannot show ...")
+        counts[level.zoom] = _render_tiles(
+            level.points, level.placements, level.fonts, street_font,
+            draw_street=True, markers=markers, out_dir=out_dir,
+        )
+        for i in level.rescued[:_COMPLETION_REPORT_LIMIT]:
+            _lon, _lat, number, unit, street = rows[i]
+            print(f"Raster z{level.zoom}:   {unit + '-' if unit else ''}"
+                  f"{number} {street}")
+        extra = len(level.rescued) - _COMPLETION_REPORT_LIMIT
+        if extra > 0:
+            print(f"Raster z{level.zoom}:   ... and {extra:,} more")
+    return counts
+
+
+def _place_zoom(cfg, slim_path, zoom, fonts, labelled):
+    """Read the slim file at one zoom and place its labels.
+
+    Returns (points, placements, rows); ``points`` is the list the placements
+    refer to, which is what a caller must render (see _place_complexes).
+    """
+    print(f"Raster z{zoom}: reading points ...")
+    points, complexes, rows = _read_points(slim_path, zoom)
+    if not labelled:
+        return points, [None] * len(points), rows
+
+    print(f"Raster z{zoom}: placing {len(points):,} labels ...")
+    points, placements, stats, crowded = _place_complexes(points, complexes, fonts)
+    print(f"Raster z{zoom}: placed inner={stats['inner']:,} "
+          f"leadered={stats['leadered']:,} dropped={stats['dropped']:,} "
+          f"(shrunk={stats['shrunk']:,}) of {len(points):,}")
+    if crowded:
+        short = sum(1 for c in complexes if c and c[0] in crowded)
+        print(f"Raster z{zoom}: {len(crowded):,} crowded complexes drawn as "
+              f"unit numbers ({short:,} addresses)")
+    return points, placements, rows
+
+
+def _render_tiles(points, placements, fonts, street_font, draw_street, markers,
+                  out_dir, only=None):
+    """Bucket placed points into tiles and write the PNGs; return the count.
+
+    Tiles that hold nothing but a marker are still written: a union outline can
+    run along a seam into a tile with no addresses of its own, and half a box is
+    worse than none.  ``only`` restricts writing to a set of tile keys, which no
+    caller needs today -- every zoom is rendered whole -- but which is what a
+    sparse zoom would need if the client story ever changes.
+    """
+    tiles = defaultdict(list)
+    for (gx, gy, text, st), placement in zip(points, placements):
+        _bucket_point(tiles, gx, gy, text, st, placement, fonts)
+
+    keys = (set(tiles) if only is None else set(only)) | set(markers)
+    made_dirs = set()
+    for key in keys:
+        img = _render_tile(tiles.get(key, ()), fonts, street_font,
+                           draw_street=draw_street, markers=markers.get(key, ()))
+        tdir = os.path.join(out_dir, str(key[0]))
+        if tdir not in made_dirs:
+            os.makedirs(tdir, exist_ok=True)
+            made_dirs.add(tdir)
+        img.save(os.path.join(tdir, f"{key[1]}.png"), optimize=True)
+    return len(keys)
 
 
 def label_font_size(cfg, zoom):
@@ -228,48 +393,13 @@ def font_ladder(cfg, zoom):
     return (base, *(s for s in FONT_SIZE_LADDER if s < base))
 
 
-def _render_zoom(cfg, slim_path, zoom, fonts, street_font, label_zooms,
-                 check_hidden=False):
+def _render_zoom(cfg, slim_path, zoom, fonts, street_font, label_zooms):
+    """Read, place and render one whole zoom of the main layer."""
     label = zoom in label_zooms
-    print(f"Raster z{zoom}: reading points ...")
-    points, complexes, rows = _read_points(slim_path, zoom)
-
-    if label:
-        print(f"Raster z{zoom}: placing {len(points):,} labels ...")
-        points, placements, stats, crowded = _place_complexes(
-            points, complexes, fonts
-        )
-        print(f"Raster z{zoom}: placed inner={stats['inner']:,} "
-              f"leadered={stats['leadered']:,} dropped={stats['dropped']:,} "
-              f"(shrunk={stats['shrunk']:,}) of {len(points):,}")
-        if crowded:
-            short = sum(1 for c in complexes if c and c[0] in crowded)
-            print(f"Raster z{zoom}: {len(crowded):,} crowded complexes drawn as "
-                  f"unit numbers ({short:,} addresses)")
-    else:
-        placements = [None] * len(points)
-
-    if check_hidden:
-        audit.report(cfg, zoom, rows, points, placements, label,
-                     stack_distance=2.0 * DOT_RADIUS)
-
-    print(f"Raster z{zoom}: bucketing into tiles ...")
-    tiles = defaultdict(list)
-    for (gx, gy, text, st), placement in zip(points, placements):
-        _bucket_point(tiles, gx, gy, text, st, placement, fonts)
-
+    points, placements, _rows = _place_zoom(cfg, slim_path, zoom, fonts, label)
     out_dir = os.path.join(cfg.raster_tile_dir, str(zoom))
-    print(f"Raster z{zoom}: rendering {len(tiles):,} tiles (labels={label}) ...")
-
-    made_dirs = set()
-    for (tx, ty), entries in tiles.items():
-        img = _render_tile(entries, fonts, street_font, draw_street=label)
-        tdir = os.path.join(out_dir, str(tx))
-        if tdir not in made_dirs:
-            os.makedirs(tdir, exist_ok=True)
-            made_dirs.add(tdir)
-        img.save(os.path.join(tdir, f"{ty}.png"), optimize=True)
-    return len(tiles)
+    print(f"Raster z{zoom}: rendering tiles (labels={label}) ...")
+    return _render_tiles(points, placements, fonts, street_font, label, {}, out_dir)
 
 
 def _read_points(slim_path, zoom):
@@ -590,12 +720,18 @@ def _bucket_point(tiles, gx, gy, text, st, placement, fonts):
             )
 
 
-def _render_tile(entries, fonts, street_font, draw_street):
+def _render_tile(entries, fonts, street_font, draw_street, markers=()):
     img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     color_map = _assign_tile_colors({st for _, _, _, st, _ in entries})
     occupied = []  # bboxes (x0, y0, x1, y1) that floating street labels avoid
+
+    # Detail markers go down first, so an address label drawn later covers the
+    # dashes rather than the other way round -- the box is a hint, the number is
+    # the content.  Their footprint joins ``occupied`` so the floating street
+    # name does not land on the outline.
+    _draw_markers(draw, markers, occupied)
 
     # Leader lines first so dots cover their endpoints cleanly.
     for ox, oy, text, st, placement in entries:
@@ -635,6 +771,22 @@ def _render_tile(entries, fonts, street_font, draw_street):
         _draw_street_labels(draw, entries, street_font, occupied, color_map)
 
     return img
+
+
+def _draw_markers(draw, markers, occupied):
+    """Dash the detail-layer outline: white halo under, colour over.
+
+    The halo is what keeps the box visible over dark aerial imagery, which is
+    the backdrop this layer is normally read against.
+    """
+    for width, color in ((MARKER_HALO_WIDTH, MARKER_HALO), (MARKER_WIDTH, MARKER_COLOR)):
+        for segment in markers:
+            for x0, y0, x1, y1 in deep.dashes(segment):
+                draw.line([(x0, y0), (x1, y1)], fill=color, width=width)
+    for x0, y0, x1, y1 in markers:
+        pad = MARKER_HALO_WIDTH
+        occupied.append((min(x0, x1) - pad, min(y0, y1) - pad,
+                         max(x0, x1) + pad, max(y0, y1) + pad))
 
 
 def _draw_street_labels(draw, entries, street_font, occupied, color_map):

@@ -26,7 +26,10 @@
       [lat, lon], zoom
     );
 
+    // The basemap stops at z19; the address layer may go deeper, so let OSM
+    // upscale rather than capping how far in the preview can go.
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxNativeZoom: 19,
       maxZoom: rasterMax,
       attribution:
         '&copy; <a href="https://www.openstreetmap.org/copyright">' +

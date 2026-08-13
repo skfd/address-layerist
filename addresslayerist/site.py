@@ -30,7 +30,11 @@ def build_site(cfg):
     point_count = f"{meta['count']:,}" if meta.get("count") else "many"
     build_date = date.today().isoformat()
     clat, clon = _center(meta)
-    raster_min, raster_max = min(cfg.raster_zooms), max(cfg.raster_zooms)
+    # What was published, not what was configured: a completion zoom is only
+    # rendered when the deepest configured zoom left something unlabelled, so
+    # the advertised range has to come from the tiles on disk.
+    built = cfg.built_raster_zooms
+    raster_min, raster_max = min(built), max(built)
 
     with open(cfg.asset("index.html.tmpl"), encoding="utf-8") as f:
         html = f.read()
@@ -53,6 +57,7 @@ def build_site(cfg):
         "{{VECTOR_MAXZOOM}}": str(cfg.vector_maxzoom),
         "{{RASTER_MINZOOM}}": str(raster_min),
         "{{RASTER_MAXZOOM}}": str(raster_max),
+        **_detail_replacements(cfg),
         "{{CENTER_LAT}}": f"{clat:.5f}",
         "{{CENTER_LON}}": f"{clon:.5f}",
         "{{CENTER_ZOOM}}": str(PREVIEW_ZOOM),
@@ -75,6 +80,22 @@ def build_site(cfg):
     # .nojekyll stops GitHub Pages running Jekyll over the tile directories.
     open(os.path.join(cfg.site_dir, ".nojekyll"), "w").close()
     print(f"Site rendered: {cfg.site_dir}")
+
+
+def _detail_replacements(cfg):
+    """The one line that explains the dashed marker boxes, when there are any.
+
+    A city whose deepest zoom labels everything draws no boxes and should not be
+    told to look for them.  The boxes exist exactly when the build had to add a
+    completion zoom, which is what ``built_raster_zooms`` records.
+    """
+    built = cfg.built_raster_zooms
+    if max(built) <= max(cfg.raster_zooms):
+        return {"{{DETAIL_PREVIEW_NOTE}}": ""}
+    return {"{{DETAIL_PREVIEW_NOTE}}": (
+        " A dashed box marks ground holding more numbers than fit at that "
+        f"zoom &mdash; zoom in and z{max(built)} spells them out."
+    )}
 
 
 def _load_meta(cfg):
