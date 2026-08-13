@@ -79,6 +79,9 @@ list. Two traps worth a `returnCountOnly` probe each:
 - **Attribution:** set `[layer].attribution` to a plain-ASCII string (it passes
   through the WSL shell), e.g. `(c) Town of Oakville, Open Government Licence`.
 - **Dataset page:** set `[layer].dataset_page` to the human-facing source page.
+- **Country:** set `[layer].country_code` to the ISO 3166-1 alpha-2 code (`CA`).
+  Only the Editor Layer Index submission uses it (step 8), but it costs nothing
+  to record now.
 
 ## 4. Write layer.toml
 
@@ -106,8 +109,11 @@ github_repo  = "<account>/oakville-address-layer"
 pages_url    = "https://<account>.github.io/oakville-address-layer"
 dataset_page = "https://...open-data-page..."
 attribution  = "(c) Town of Oakville, Open Government Licence"
+country_code = "CA"
 # vector_minzoom/maxzoom, raster_zooms, raster_label_zooms, layer_name,
 # wsl_distro, mvt_extra, expected_min all have sensible defaults -- only set to override.
+# boundary/description/privacy_policy_url/eli_id/eli_category tune the Editor
+# Layer Index entry (step 8); all optional.
 ```
 
 Confirm `github_repo`/`pages_url` (the account) with the user if unknown.
@@ -139,3 +145,20 @@ Needs a GitHub repo with an `origin` remote. `python run.py publish` force-pushe
 `build/site/` to an orphan `gh-pages` branch; set Pages source to that branch.
 Mind the **~1 GB per-site** GitHub Pages limit -- if a big city's raster pyramid
 approaches it, trim `[layer].raster_zooms`.
+
+## 8. Submit to the Editor Layer Index (only after publishing)
+
+`python run.py eli` writes `build/eli/<Id>.geojson`: the raster layer as an
+[Editor Layer Index](https://github.com/osmlab/editor-layer-index) entry, which
+is what gets the city into iD's and JOSM's imagery pickers. It prints a warning
+per field the index wants and the config lacks -- work through them, then follow
+the printed fork/copy/PR steps.
+
+Two things worth doing before opening the PR:
+
+- **Give it a real boundary.** Without `[layer].boundary` the extent is the
+  data's bounding box, which for most cities also claims a slice of the
+  neighbours. Point it at a GeoJSON of the municipal outline (the open-data
+  portal usually has one; `geojson.io` works for a hand-drawn approximation).
+- **Check the tiles are live at `pages_url`.** The entry is a URL template
+  pointing at the published site, so submit only after `publish`.

@@ -4,6 +4,7 @@
     addresslayerist vector    # build vector (MVT) tiles via WSL tippecanoe
     addresslayerist raster    # build labelled raster (PNG) tiles
     addresslayerist site      # render the landing page
+    addresslayerist eli       # emit an Editor Layer Index entry to PR
     addresslayerist publish   # force-push build/site to gh-pages
     addresslayerist build     # slim + vector + raster + site
     addresslayerist update    # build + publish (the daily entry point)
@@ -25,6 +26,7 @@ from addresslayerist.slim import slim as _slim
 from addresslayerist.vector import build_vector
 from addresslayerist.raster import build_raster
 from addresslayerist.site import build_site
+from addresslayerist.eli import build_eli
 from addresslayerist.publish import publish as _publish
 
 
@@ -74,6 +76,11 @@ def cmd_site(cfg, args):
     build_site(cfg)
 
 
+def cmd_eli(cfg, args):
+    _banner("Editor Layer Index entry")
+    build_eli(cfg)
+
+
 def cmd_publish(cfg, args):
     _banner("Publish")
     _publish(cfg)
@@ -96,6 +103,7 @@ COMMANDS = {
     "vector": (cmd_vector, "Build vector (MVT) tiles via WSL tippecanoe"),
     "raster": (cmd_raster, "Build labelled raster (PNG) tiles"),
     "site": (cmd_site, "Render the landing page"),
+    "eli": (cmd_eli, "Emit an Editor Layer Index entry for the raster layer"),
     "publish": (cmd_publish, "Force-push build/site to the gh-pages branch"),
     "build": (cmd_build, "slim + vector + raster + site"),
     "update": (cmd_update, "build + publish (daily scheduled-task entry point)"),

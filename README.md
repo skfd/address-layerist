@@ -49,6 +49,25 @@ python run.py update                 # build + publish (daily entry point)
 Individual steps: `slim vector raster site publish`. Run
 `addresslayerist onboard` for onboarding guidance.
 
+### Getting into the editors' layer pickers
+
+```
+python run.py eli                    # build/eli/<Id>.geojson, ready to PR
+```
+
+`eli` renders the **raster** layer as an
+[Editor Layer Index](https://github.com/osmlab/editor-layer-index) entry -- the
+index iD and JOSM read to populate their imagery pickers, so a mapper picks the
+city off a list instead of copy-pasting a URL template off the landing page. The
+vector layer has no equivalent: the index only describes imagery (`type: tms`).
+
+It is deliberately not part of `build`. A submission happens once, and a missing
+`license_url` should not be able to break a nightly tile build -- so `eli` prints
+a warning for every field the index wants and the config lacks, plus the
+fork/copy/PR steps. Set `[layer].boundary` to a GeoJSON of the municipal outline
+before submitting; the fallback extent is the data's bounding box, which for most
+cities also claims part of the neighbours.
+
 ### Data input
 
 The engine never downloads. `slim` reads, in order: `--input PATH`; else the
@@ -87,5 +106,5 @@ racing or erroring).
 ## Tests
 
 ```
-python -m pytest          # tile math + slim property-map contract
+python -m pytest          # tile math + label rules + slim property-map + ELI entry
 ```

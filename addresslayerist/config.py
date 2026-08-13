@@ -47,6 +47,12 @@ class Config:
     attribution: str = ""
     changes_url: str = ""                 # optional sibling change-tracker site
     head_extra: str = ""                  # raw HTML injected before </head> (e.g. analytics)
+    description: str = ""                 # short English blurb (Editor Layer Index)
+    country_code: str = ""                # ISO 3166-1 alpha-2, upper case (e.g. "CA")
+    privacy_policy_url: str = ""          # tile host's privacy policy (ELI requires one)
+    boundary: str = ""                    # GeoJSON city outline, for the ELI extent
+    eli_id: str = ""                      # ELI entry id (default: <Slug>-Addresses)
+    eli_category: str = "other"           # ELI category; address labels are not imagery
     layer_name: str = "addresses"
     wsl_distro: str = "Ubuntu"
     vector_minzoom: int = 12
@@ -123,6 +129,12 @@ class Config:
         return os.path.join(self.site_dir, "tiles", "raster")
 
     @property
+    def eli_dir(self):
+        # Outside site_dir on purpose: an index submission is a one-off file to
+        # PR elsewhere, not something to publish with the tiles.
+        return os.path.join(self.build_dir, "eli")
+
+    @property
     def title_or_default(self):
         return self.title or f"{self.provider} Address Points"
 
@@ -173,6 +185,12 @@ def load(path="layer.toml", project_dir=None):
         attribution=layer.get("attribution", ""),
         changes_url=layer.get("changes_url", ""),
         head_extra=layer.get("head_extra", ""),
+        description=layer.get("description", ""),
+        country_code=layer.get("country_code", ""),
+        privacy_policy_url=layer.get("privacy_policy_url", ""),
+        boundary=layer.get("boundary", ""),
+        eli_id=layer.get("eli_id", ""),
+        eli_category=layer.get("eli_category", "other"),
         layer_name=layer.get("layer_name", "addresses"),
         wsl_distro=layer.get("wsl_distro", "Ubuntu"),
         vector_minzoom=layer.get("vector_minzoom", 12),
