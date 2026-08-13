@@ -14,6 +14,12 @@ editors upscale past it. A label dropped at z19 is therefore invisible at
 71,049 features with their `name` at z19 (verified by decoding the mbtiles) and
 overzooms client-side, so nothing is permanently hidden there.
 
+Every build now measures this residual itself: the deepest zoom runs the
+hidden-address check (`audit.py`) and writes `build/<slug>-hidden-z19.csv`, so
+"which 96" is a file to open rather than a thing to re-derive. It also separates
+the two causes -- addresses *stacked* on one coordinate stay hidden at z20 and
+z21 too, so they are not part of what a deeper zoom would buy.
+
 **Measured options** (Oakville, before complex-as-street; re-measure before
 acting -- the residual is smaller now):
 

@@ -25,6 +25,11 @@ A label that fits nowhere at the zoom's font size is retried at FONT_SIZE_LADDER
 sizes before being dropped, so shrinking only ever happens where the
 alternative is no label at all.
 
+The deepest zoom additionally runs the hidden-address check (audit.py) and
+writes build/<slug>-hidden-z<zoom>.csv: dots that overlap another address's dot
+and labels that were dropped there are hidden in the whole raster layer, since
+clients upscale past the deepest zoom rather than fetching a deeper tile.
+
 Street identity is conveyed by colour: hash(street_name) -> stable hue.  Address
 labels and their leader lines use that colour.  In every tile, each
 street that has at least STREET_LABEL_MIN_DOTS dots gets one floating street
@@ -47,6 +52,7 @@ from collections import defaultdict
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import audit
 from .label import display_label
 from .tilemath import TILE_SIZE, lonlat_to_pixel
 
@@ -193,7 +199,12 @@ def build_raster(cfg):
     label_zooms = set(cfg.raster_label_zooms)
     fonts = {z: {s: ImageFont.truetype(label_path, s) for s in font_ladder(cfg, z)}
              for z in cfg.raster_zooms}
-    return {z: _render_zoom(cfg, slim_path, z, fonts[z], street_font, label_zooms)
+    # The hidden-address check only means something at the deepest zoom: that is
+    # the last tile a client fetches, so what is unreadable there is unreadable
+    # everywhere.  See audit.py.
+    deepest = max(cfg.raster_zooms, default=None)
+    return {z: _render_zoom(cfg, slim_path, z, fonts[z], street_font, label_zooms,
+                            check_hidden=(z == deepest))
             for z in cfg.raster_zooms}
 
 
@@ -211,10 +222,11 @@ def font_ladder(cfg, zoom):
     return (base, *(s for s in FONT_SIZE_LADDER if s < base))
 
 
-def _render_zoom(cfg, slim_path, zoom, fonts, street_font, label_zooms):
+def _render_zoom(cfg, slim_path, zoom, fonts, street_font, label_zooms,
+                 check_hidden=False):
     label = zoom in label_zooms
     print(f"Raster z{zoom}: reading points ...")
-    points, complexes = _read_points(slim_path, zoom)
+    points, complexes, rows = _read_points(slim_path, zoom)
 
     if label:
         print(f"Raster z{zoom}: placing {len(points):,} labels ...")
@@ -230,6 +242,10 @@ def _render_zoom(cfg, slim_path, zoom, fonts, street_font, label_zooms):
                   f"unit numbers ({short:,} addresses)")
     else:
         placements = [None] * len(points)
+
+    if check_hidden:
+        audit.report(cfg, zoom, rows, points, placements, label,
+                     stack_distance=2.0 * DOT_RADIUS)
 
     print(f"Raster z{zoom}: bucketing into tiles ...")
     tiles = defaultdict(list)
@@ -251,7 +267,7 @@ def _render_zoom(cfg, slim_path, zoom, fonts, street_font, label_zooms):
 
 
 def _read_points(slim_path, zoom):
-    """Return (points, complexes) in zoom-level pixels.
+    """Return (points, complexes, rows) in zoom-level pixels.
 
     ``points`` is [(gx, gy, label, street), ...] with the label every point
     would prefer: the housenumber with the unit in front ("3-2441"), on its own
@@ -262,6 +278,11 @@ def _read_points(slim_path, zoom):
     everything else.  It is only a candidacy: whether a complex is actually
     drawn the short way is decided during placement, by whether the full labels
     fit.  See _place_complexes.
+
+    ``rows`` is the third parallel list, holding each address as the source
+    gave it -- (lon, lat, number, unit, street).  Rendering does not need it;
+    the hidden-address report does, since a finding is only actionable if it
+    names an address someone can look up.  See audit.py.
     """
     rows = []
     doors = defaultdict(int)
@@ -285,7 +306,7 @@ def _read_points(slim_path, zoom):
         complexes.append((key, unit)
                          if key is not None and doors[key] >= MIN_COMPLEX_DOORS
                          else None)
-    return points, complexes
+    return points, complexes, rows
 
 
 def _shorten(points, complexes, crowded):

@@ -94,6 +94,15 @@ racing or erroring).
   `suffix` tag whose value is already inside its number).
 - **Slim sanity is source-relative:** fail if fewer than 95% of the input features
   survive (no per-city magic count bounds).
+- **The deepest raster zoom is audited** (`audit.py`): after placing labels there,
+  the build lists every address that is *stacked* (its dot sits under another
+  address's dot) or *unlabelled* (placement found nowhere for its number) and
+  writes `build/<slug>-hidden-z<zoom>.csv`. Only the deepest zoom is checked,
+  because clients upscale past it rather than fetching a deeper tile -- so a
+  finding there is hidden at every zoom, whereas the same address at z17 is just
+  waiting to be zoomed into. Stacked is almost always a source problem (a tower's
+  doors on one centroid) and unlabelled a density one; the build only reports
+  them, it never fails on them.
 
 ## Requirements
 
@@ -107,4 +116,5 @@ racing or erroring).
 
 ```
 python -m pytest          # tile math + label rules + slim property-map + ELI entry
+                          # + label placement + the hidden-address check
 ```

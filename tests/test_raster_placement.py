@@ -181,7 +181,8 @@ def _slim(rows):
 def _read(rows, zoom=19):
     path = _slim(rows)
     try:
-        return raster._read_points(path, zoom)
+        points, complexes, _source_rows = raster._read_points(path, zoom)
+        return points, complexes
     finally:
         os.remove(path)
 
