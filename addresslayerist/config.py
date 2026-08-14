@@ -59,13 +59,14 @@ class Config:
     vector_maxzoom: int = 19
     raster_zooms: list = field(default_factory=lambda: [16, 17, 18, 19])
     raster_label_zooms: list = field(default_factory=lambda: [17, 18, 19])
-    # Keep rendering deeper raster zooms until every address carries a label,
-    # up to this zoom; 0 disables it. The zooms are ordinary members of the
-    # raster layer -- rendered whole, served from the same URL, advertised in
-    # the same zoom range -- because a client that meets a missing tile shows
-    # blank rather than the parent scaled up, so a partly-filled zoom would
-    # blank the map everywhere it has no tile. That makes this a size decision,
-    # hence per-city: a published site can approach GitHub Pages' ~1 GB limit.
+    # Keep adding deeper raster zooms until every address carries a label, up to
+    # this zoom; 0 disables it. A completion zoom ships only the tiles holding
+    # the addresses it rescues -- everywhere else it 404s and the client is left
+    # with the parent it was already showing. That keeps it nearly free (Toronto
+    # finishes in 180 tiles rather than the 283,239 a whole zoom would cost), so
+    # this is no longer a size decision. It stays opt-in because it changes what
+    # the layer advertises: the range grows by a zoom that is mostly absent, and
+    # how gracefully a client takes that 404 is worth deciding per city.
     raster_complete_to: int = 0
     # zoom -> label font size, overriding the engine's per-zoom defaults. Only
     # worth setting for a city whose density differs a lot from the norm.
@@ -158,6 +159,18 @@ class Config:
         built = sorted(int(name) for name in os.listdir(self.raster_tile_dir)
                        if name.isdigit())
         return built or sorted(self.raster_zooms)
+
+    @property
+    def deepest_whole_zoom(self):
+        """Deepest built zoom that covers the whole city.
+
+        Anything past it is a completion zoom, which exists only over the few
+        tiles it was added for. A viewer that fetches tiles across the map --
+        the landing page's preview -- has to stop here and upscale, or it spends
+        its requests on 404s; an editor pointed at a specific address does not.
+        """
+        whole = [z for z in self.built_raster_zooms if z <= max(self.raster_zooms)]
+        return max(whole or self.raster_zooms)
 
     @property
     def eli_dir(self):

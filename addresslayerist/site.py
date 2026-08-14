@@ -57,6 +57,7 @@ def build_site(cfg):
         "{{VECTOR_MAXZOOM}}": str(cfg.vector_maxzoom),
         "{{RASTER_MINZOOM}}": str(raster_min),
         "{{RASTER_MAXZOOM}}": str(raster_max),
+        "{{RASTER_NATIVE_MAXZOOM}}": str(cfg.deepest_whole_zoom),
         **_detail_replacements(cfg),
         "{{CENTER_LAT}}": f"{clat:.5f}",
         "{{CENTER_LON}}": f"{clon:.5f}",

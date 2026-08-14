@@ -8,8 +8,10 @@ marker has to be the outline of the *union*.
 import os
 import tempfile
 
-from addresslayerist import deep
-from addresslayerist.config import Config
+from PIL import ImageFont
+
+from addresslayerist import deep, raster
+from addresslayerist.config import ENGINE_ASSETS_DIR, Config
 from addresslayerist.tilemath import TILE_SIZE
 
 
@@ -118,6 +120,79 @@ def test_the_advertised_range_is_what_was_built_not_what_was_asked_for():
             os.makedirs(os.path.join(cfg.raster_tile_dir, str(zoom)))
         os.makedirs(os.path.join(cfg.raster_tile_dir, "notazoom"))
         assert cfg.built_raster_zooms == [16, 17, 18, 19, 20]
+
+
+def _fonts(size=raster.FONT_SIZE):
+    path = os.path.join(ENGINE_ASSETS_DIR, "font", "DejaVuSans.ttf")
+    return {size: ImageFont.truetype(path, size)}
+
+
+def _written(out_dir):
+    """{(tx, ty)} for the PNGs under a rendered zoom directory."""
+    return {(int(x), int(os.path.splitext(f)[0]))
+            for x in os.listdir(out_dir)
+            for f in os.listdir(os.path.join(out_dir, x))}
+
+
+def _points_in_tiles(*tiles):
+    """One labelled point in the middle of each named tile."""
+    return [((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE, "1", "SOME ST")
+            for tx, ty in tiles]
+
+
+def test_a_completion_zoom_writes_only_the_tiles_it_was_added_for():
+    # The whole point of a completion zoom: it exists over the ground holding
+    # the stragglers and nowhere else, so it costs tiles in the tens rather
+    # than in the hundreds of thousands. Everywhere else 404s on purpose.
+    fonts = _fonts()
+    points = _points_in_tiles((10, 20), (11, 20), (99, 99))
+    placements, _stats = raster._place_labels(points, fonts)
+    with tempfile.TemporaryDirectory() as tmp:
+        raster._render_tiles(points, placements, fonts, _fonts(12)[12],
+                             draw_street=True, markers={}, out_dir=tmp,
+                             only={(10, 20): [0], (11, 20): [1]})
+        assert _written(tmp) == {(10, 20), (11, 20)}, "the third tile is not ours"
+
+
+def test_a_marker_tile_is_written_even_when_it_holds_none_of_the_stragglers():
+    # A union outline can run along a seam into a tile the level does not
+    # otherwise render; half a box is worse than none, so that tile is written.
+    fonts = _fonts()
+    points = _points_in_tiles((10, 20))
+    placements, _stats = raster._place_labels(points, fonts)
+    markers = deep.markers_for({(84, 84)}, deep_zoom=21, parent_zoom=20)
+    assert set(markers) == {(42, 42)}, "the marker lands outside our own tile"
+    with tempfile.TemporaryDirectory() as tmp:
+        raster._render_tiles(points, placements, fonts, _fonts(12)[12],
+                             draw_street=True, markers=markers, out_dir=tmp,
+                             only={(10, 20): [0]})
+        assert _written(tmp) == {(10, 20), (42, 42)}
+
+
+def test_the_base_zooms_are_still_rendered_whole():
+    # Only a completion zoom is sparse; passing no ``only`` writes every tile
+    # that holds a point, which is what the configured raster_zooms do.
+    fonts = _fonts()
+    points = _points_in_tiles((10, 20), (11, 20), (99, 99))
+    placements, _stats = raster._place_labels(points, fonts)
+    with tempfile.TemporaryDirectory() as tmp:
+        raster._render_tiles(points, placements, fonts, _fonts(12)[12],
+                             draw_street=True, markers={}, out_dir=tmp)
+        assert _written(tmp) == {(10, 20), (11, 20), (99, 99)}
+
+
+def test_the_preview_stops_at_the_deepest_whole_zoom():
+    # The advertised range grows with a sparse completion zoom, but a viewer
+    # that pans across the map must not fetch into it -- it would spend its
+    # requests on 404s, which Leaflet draws as blank rather than as the parent.
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Config(slug="testville", provider="Test", project_dir=tmp)
+        cfg.raster_complete_to = 21
+        assert cfg.deepest_whole_zoom == 19          # nothing built yet
+        for zoom in (16, 17, 18, 19, 20):
+            os.makedirs(os.path.join(cfg.raster_tile_dir, str(zoom)))
+        assert max(cfg.built_raster_zooms) == 20     # advertised
+        assert cfg.deepest_whole_zoom == 19          # but fetched only to here
 
 
 if __name__ == "__main__":

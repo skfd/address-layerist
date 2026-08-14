@@ -4,20 +4,22 @@ A handful of addresses cannot be labelled even at the deepest raster zoom -- in
 Oakville, doors of one apartment block a metre or so apart -- so the build adds
 a deeper zoom until none are left (``[layer].raster_complete_to``).
 
-Those zooms are ordinary members of the raster layer: same URL, same advertised
-range, rendered whole.  Rendering only the few tiles that hold the stragglers
-would be far cheaper, and it does not work.  A client that asks for a tile and
-gets a 404 draws nothing there -- Leaflet marks the failed tile active and
-prunes the parent it was scaling up (``_tileReady`` -> ``_pruneTiles``), so a
-sparse zoom would blank the map everywhere it had no tile, exactly when a mapper
-zoomed in.  Completeness is therefore bought by the zoom, not by the tile.
+Those zooms share the layer's URL and advertised range, but they are *sparse*:
+only the tiles holding the stragglers are rendered.  Everywhere else the zoom is
+absent and the client gets a 404, which is the deliberate trade -- rendering one
+whole is three orders of magnitude more expensive (Toronto: 283,239 tiles /
+666 MB against 180) and adds nothing the parent zoom was not already showing.
+How a client takes that 404 varies: Leaflet marks the failed tile active and
+prunes the parent it was scaling up (``_tileReady`` -> ``_pruneTiles``), so it
+blanks, which is why the landing page's preview stops at the deepest whole zoom
+and upscales instead of fetching into the sparse one.
 
-What stays sparse is the *marker*: the zoom above draws a dashed box around the
-ground whose numbers only appear deeper -- "there is more here than fits".  The
-boxes are drawn as the outline of their **union**, because where an apartment
-block needs a deeper zoom several neighbouring tiles qualify at once, and one
-box per tile degenerates into a lattice across the parent that reads as debug
-output rather than as a hint.
+The marker is what makes a sparse zoom navigable: the zoom above draws a dashed
+box around the ground whose numbers only appear deeper -- "there is more here
+than fits, and it is here that zooming in pays".  The boxes are drawn as the
+outline of their **union**, because where an apartment block needs a deeper zoom
+several neighbouring tiles qualify at once, and one box per tile degenerates
+into a lattice across the parent that reads as debug output rather than a hint.
 
 Everything here is pure geometry over tile coordinates; rendering lives in
 raster.py.

@@ -21,6 +21,11 @@
     var zoom = num(el.dataset.centerZoom, 16);
     var rasterMin = num(el.dataset.rasterMin, 16);
     var rasterMax = num(el.dataset.rasterMax, 19);
+    // A completion zoom exists only over the handful of tiles it was added for,
+    // so the preview fetches up to the deepest whole zoom and upscales past it.
+    // Asking for the sparse zoom across a panning map would spend the requests
+    // on 404s, and Leaflet blanks a failed tile rather than keeping the parent.
+    var rasterNative = num(el.dataset.rasterNative, rasterMax);
 
     var map = L.map(el, { minZoom: 14, maxZoom: rasterMax }).setView(
       [lat, lon], zoom
@@ -38,7 +43,7 @@
 
     L.tileLayer(el.dataset.rasterUrl, {
       minZoom: rasterMin,
-      maxNativeZoom: rasterMax,
+      maxNativeZoom: rasterNative,
       maxZoom: rasterMax,
       attribution: el.dataset.attribution || "",
     }).addTo(map);

@@ -74,6 +74,10 @@ def build_eli(cfg):
         # The zooms actually published, which includes any completion zoom the
         # build added: advertising less would leave the deepest tiles unfetched,
         # advertising more would send editors to tiles that do not exist.
+        # A completion zoom is sparse, so the deepest zoom advertised here is
+        # mostly 404 by design -- it has to be advertised anyway or the tiles
+        # that do exist are never asked for, and the marker box on the zoom
+        # above is what sends a mapper to the ground where they do.
         "min_zoom": min(cfg.built_raster_zooms),
         "max_zoom": max(cfg.built_raster_zooms),
         # Labels on transparent tiles: an overlay, never a background layer.

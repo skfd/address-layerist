@@ -114,18 +114,19 @@ racing or erroring).
   rectangle: reserving them cost Oakville 39 labels at z19 and all 5 of its z20
   drops, and produced the visible symptom of a number missing beside obvious
   white space.
-- **Completeness is bought by the zoom, not by the tile** (`deep.py`). Set
+- **A completion zoom ships only the tiles it was added for** (`deep.py`). Set
   `[layer].raster_complete_to` and the build keeps adding deeper zooms until the
   audit finds nothing unlabelled, stopping as soon as it is clean (Oakville: z19
-  leaves 57, z20 labels all of them, so it stops there). Those zooms are
-  ordinary members of the raster layer -- same URL, same advertised range,
-  **rendered whole**. Rendering only the few tiles that hold the stragglers is
-  ~300 KB instead of ~104 MB and does not work: a client that meets a 404 draws
-  nothing rather than scaling the parent up (Leaflet's `_tileReady` marks the
-  failed tile active, so `_pruneTiles` drops the parent it was showing), so a
-  sparse zoom blanks the map everywhere it has no tile -- exactly when a mapper
-  zooms in. Hence the size, hence per-city: a published site can approach the
-  Pages limit, so a big city may prefer to stop earlier and live with a residual.
+  leaves 57, z20 labels all of them, so it stops there). Those zooms share the
+  layer's URL and advertised range, but they exist **only over the ground
+  holding the stragglers** -- Toronto finishes in 180 tiles where rendering the
+  zoom whole costs 283,239 tiles and 666 MB, to say nothing new about ground the
+  parent already covers. Everywhere else the zoom 404s, deliberately. Clients
+  differ on how they take that: Leaflet blanks (`_tileReady` marks the failed
+  tile active, so `_pruneTiles` drops the parent it was scaling), which is why
+  the landing page's preview stops at `deepest_whole_zoom` and upscales rather
+  than fetching into the sparse zoom. An editor pointed at one address does not
+  pan across the 404s the way a preview map does.
 - **The zoom range is read from the tiles, not the config** (`built_raster_zooms`).
   A completion zoom only exists if it was needed, so the landing page, the JOSM
   `tms[..]` snippet and the ELI entry all advertise what was published.
@@ -133,7 +134,9 @@ racing or erroring).
   everything, it draws a dashed box around the ground whose numbers appear one
   zoom deeper. The boxes are the outline of their *union*: a crowded block needs
   several neighbouring tiles at once, and one box per tile turns the parent into
-  a lattice that reads as debug output.
+  a lattice that reads as debug output. With a sparse completion zoom the box is
+  load-bearing rather than decorative: it is how a mapper knows which of the
+  deeper tiles exist, since the rest of that zoom is 404.
 
 ## Requirements
 

@@ -264,12 +264,14 @@ class _Level:
 def _completion_levels(cfg, slim_path, base_points, base_placements):
     """Plan the zooms needed to finish labelling, one _Level each.
 
-    Each level is an ordinary zoom of the raster layer and is rendered whole --
-    a partly-filled zoom is not an option, because a client that meets a missing
-    tile draws nothing rather than scaling the parent up, so the city would go
-    blank everywhere the zoom had no tile.  What is sparse is only the *marker*:
-    ``cells`` records which tiles hold addresses this zoom is being rendered
-    for, so the zoom above can point at them.
+    A completion zoom ships only the tiles that hold the addresses it exists to
+    rescue: ``cells`` records those tiles, and they are the whole of what is
+    rendered.  Everywhere else the zoom is simply absent, and a client that asks
+    there gets a 404 -- accepted deliberately, because rendering the zoom whole
+    costs three orders of magnitude more (Toronto: 283,239 tiles / 666 MB
+    against 180 tiles) to say nothing new about ground the parent already
+    covers.  The dashed marker box on the parent is what makes the sparseness
+    navigable: it says where zooming in has something to add.
 
     Trailing levels that rescue nobody are dropped -- that is the signature of
     two doors on one coordinate, which no zoom parts, and rendering a whole
@@ -303,7 +305,11 @@ def _completion_levels(cfg, slim_path, base_points, base_placements):
 
 
 def _render_completion(cfg, levels, street_font, rows):
-    """Render each completion zoom in full; return {zoom: tile_count}."""
+    """Render each completion zoom's own tiles; return {zoom: tile_count}.
+
+    Only ``level.cells`` is written -- the tiles holding the addresses this zoom
+    rescues -- plus whatever tiles a marker for the *next* level runs through.
+    """
     counts = {}
     for n, level in enumerate(levels):
         # A level marks the level below it, so a mapper who follows one box
@@ -313,11 +319,13 @@ def _render_completion(cfg, levels, street_font, rows):
             deeper = levels[n + 1]
             markers = deep.markers_for(deeper.cells, deeper.zoom, level.zoom)
         out_dir = os.path.join(cfg.raster_tile_dir, str(level.zoom))
-        print(f"Raster z{level.zoom}: rendering tiles for "
+        planned = len(set(level.cells) | set(markers))
+        print(f"Raster z{level.zoom}: rendering {planned:,} tiles for "
               f"{len(level.rescued):,} addresses the zoom above cannot show ...")
         counts[level.zoom] = _render_tiles(
             level.points, level.placements, level.fonts, street_font,
             draw_street=True, markers=markers, out_dir=out_dir,
+            only=level.cells,
         )
         for i in level.rescued[:_COMPLETION_REPORT_LIMIT]:
             _lon, _lat, number, unit, street = rows[i]
@@ -358,9 +366,9 @@ def _render_tiles(points, placements, fonts, street_font, draw_street, markers,
 
     Tiles that hold nothing but a marker are still written: a union outline can
     run along a seam into a tile with no addresses of its own, and half a box is
-    worse than none.  ``only`` restricts writing to a set of tile keys, which no
-    caller needs today -- every zoom is rendered whole -- but which is what a
-    sparse zoom would need if the client story ever changes.
+    worse than none.  ``only`` restricts writing to a set of tile keys, which is
+    how a completion zoom ships just the ground it was added for; the base zooms
+    pass nothing and are rendered whole.
     """
     tiles = defaultdict(list)
     for (gx, gy, text, st), placement in zip(points, placements):

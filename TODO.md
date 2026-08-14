@@ -16,24 +16,35 @@ visibly free. Colliding the leader as the *segment* it is took z19 from 96
 unlabelled to 57 and z20 from 5 to zero, and cut shrunken labels from 95 to 32.
 The old sizing table was measuring a bug.
 
-**Why the sparse version was dropped.** The first cut rendered only the 36 tiles
-that hold the stragglers -- 300 KB against 104 MB -- and published them as a
-separate opt-in overlay. It was rejected on the grounds that mappers should not
-have to add a second layer to see addresses: zooming in should just show them.
-Folding a *sparse* zoom into the main layer is not an option, and this is
-settled rather than assumed. Leaflet 1.9.4 `_tileReady` marks a failed tile
-`loaded` and `active`, then calls `_pruneTiles`, whose `_retainParent` only runs
-for tiles that are `current && !active` -- so a 404 child does not keep the
-parent it was scaling up, and the area goes blank. A partly-filled zoom would
-blank the map everywhere it had no tile.
+**Why the sparse version was dropped, and then adopted (2026-08-13).** The first
+cut rendered only the 36 tiles that hold the stragglers -- 300 KB against 104 MB
+-- and published them as a *separate opt-in overlay*. That packaging was
+rejected on the grounds that mappers should not have to add a second layer to
+see addresses: zooming in should just show them. Folding a sparse zoom into the
+main layer was then rejected too, on client behaviour: Leaflet 1.9.4
+`_tileReady` marks a failed tile `loaded` and `active`, then calls
+`_pruneTiles`, whose `_retainParent` only runs for tiles that are
+`current && !active` -- so a 404 child does not keep the parent it was scaling
+up, and the area goes blank.
+
+Toronto reopened it. A whole z20 there is **283,239 tiles / 666 MB** on a site
+already at 1,068 MB, against **180 tiles** sparse -- the difference between
+publishable and not, where for Oakville it had only been 104 MB against 300 KB.
+The Leaflet finding also turned out to be narrower than it reads: Leaflet is the
+landing page's *preview*, not the audience, and the preview can simply stop at
+the deepest whole zoom (`maxNativeZoom`) and upscale, which costs it the deep
+labels and nothing else. The 404s were accepted as a deliberate trade, and a
+completion zoom now renders `only=level.cells`. The marker box, previously a
+hint, is now what makes the sparse zoom navigable.
 
 **What shipped.**
 
 - Exact leader geometry in `_place_labels` (box-vs-box, box-vs-segment,
   segment-vs-segment). Same invariants, more room.
-- `[layer].raster_complete_to`: keep rendering deeper zooms, whole, until the
-  audit finds nothing unlabelled. Stops as soon as it is clean, and drops a
-  trailing zoom that rescues nobody (two doors on one coordinate).
+- `[layer].raster_complete_to`: keep adding deeper zooms until the audit finds
+  nothing unlabelled. Stops as soon as it is clean, and drops a trailing zoom
+  that rescues nobody (two doors on one coordinate). Each such zoom ships only
+  the tiles holding its stragglers; the rest of it is 404 on purpose.
 - The published zoom range is read from the tiles on disk, so the landing page,
   the JOSM snippet and the ELI entry advertise what exists.
 - A dashed marker box where a zoom cannot show everything, drawn as the outline
@@ -46,17 +57,19 @@ as the source problem it is.
 
 **Still open:**
 
-- Not verified in JOSM or iD on the real site. Nothing here should surprise
-  them -- it is an ordinary zoom range now -- but nobody has walked it.
-- Toronto cannot afford this: it is already ~1 GB, ~94% raster, and a z20 would
-  roughly double it against Pages' ~1 GB limit. It stays at `raster_complete_to
-  = 0` and keeps its residual. If that becomes unacceptable, the sparse tiles +
-  a client that falls back to the parent is the design to revisit -- the
-  machinery for rendering only selected tiles is still in `_render_tiles`.
+- **Not verified in JOSM or iD on the real site, and this now matters more than
+  it did.** With a sparse completion zoom, an editor that mishandles a 404 the
+  way Leaflet does would blank the deepest zoom over most of the city rather
+  than upscale the parent. Whoever walks it should zoom past the deepest whole
+  zoom *away* from a marker box, which is the case that 404s.
+- Oakville's z20 was rendered whole (45,500 tiles, 104 MB) before the switch and
+  those tiles are still on disk, so its next build refreshes ~36 sparse tiles
+  and republishes the stale rest. Harmless but untidy, and it will not clear
+  itself until the build learns to delete (see below).
 - A denser candidate set (16 compass directions instead of 8) measured a further
   57 -> 11 at z19 on top of exact leaders, at the cost of doubling leader lines
-  (316 -> 624). Not adopted, but for a city that cannot afford a completion zoom
-  it is the cheapest remaining lever.
+  (316 -> 624). Measured again on Toronto: 251 -> 186. Not adopted; a completion
+  zoom is now cheap enough that this is the more expensive lever of the two.
 - Placement is greedy in north-to-south order, so a slot goes to whoever asks
   first rather than to whoever has fewest options. Placing most-constrained
   points first might beat both of the above without adding a single slot.
