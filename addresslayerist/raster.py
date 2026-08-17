@@ -54,6 +54,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 from collections import defaultdict
 
 from PIL import Image, ImageDraw, ImageFont
@@ -241,6 +242,9 @@ def build_raster(cfg):
     counts[deepest] = _render_tiles(points, placements, fonts[deepest], street_font,
                                     labelled, markers, out_dir)
     counts.update(_render_completion(cfg, levels, street_font, rows))
+    # Every zoom has now been rendered, so anything else under the tile root is
+    # from a build that wanted a zoom this one does not.
+    _prune_zooms(cfg, set(counts))
     return counts
 
 
@@ -384,7 +388,79 @@ def _render_tiles(points, placements, fonts, street_font, draw_street, markers,
             os.makedirs(tdir, exist_ok=True)
             made_dirs.add(tdir)
         img.save(os.path.join(tdir, f"{key[1]}.png"), optimize=True)
+
+    stale = _prune_tiles(out_dir, keys)
+    if stale:
+        print(f"Raster z{os.path.basename(out_dir)}: removed {stale:,} stale tiles "
+              f"an earlier build left behind")
     return len(keys)
+
+
+def _prune_tiles(out_dir, keys):
+    """Delete tiles under ``out_dir`` this run did not write; return the count.
+
+    Tiles are rendered straight into the published tree and ``publish`` snapshots
+    whatever is on disk, so without this a tile an earlier run wrote and this one
+    no longer wants is republished forever.  The sparse completion zoom made that
+    concrete: Oakville's z20 was rendered whole once (45,500 tiles, 104 MB) and
+    now ships the ~36 that hold its stragglers, with the other 45,464 still on
+    disk and still going out.  A shrinking extent does the same, quietly.
+
+    Pruning *after* the write, rather than clearing the zoom before it, costs one
+    scandir instead of re-encoding every tile that did not change -- and a crash
+    mid-render leaves the previous zoom intact rather than a half-empty one.  The
+    contrast with vector.py, which does clear first, is deliberate: tippecanoe
+    explodes into an empty directory by nature, and that clear is racing a WSL
+    idle timeout rather than saving work.
+
+    Only ``<x>/<y>.png`` is considered.  Anything else under the tree belongs to
+    somebody else and is both left alone and enough to keep its column.
+    """
+    if not os.path.isdir(out_dir):
+        return 0
+    removed = 0
+    with os.scandir(out_dir) as columns:
+        for column in columns:
+            if not (column.name.isdigit() and column.is_dir()):
+                continue
+            x = int(column.name)
+            kept = 0
+            with os.scandir(column.path) as tiles:
+                for tile in tiles:
+                    stem, ext = os.path.splitext(tile.name)
+                    if ext != ".png" or not stem.isdigit() or not tile.is_file():
+                        kept += 1
+                    elif (x, int(stem)) in keys:
+                        kept += 1
+                    else:
+                        os.remove(tile.path)
+                        removed += 1
+            if not kept:
+                os.rmdir(column.path)
+    return removed
+
+
+def _prune_zooms(cfg, rendered):
+    """Remove whole zoom directories this run did not render; return the count.
+
+    An orphaned zoom is worse than orphaned tiles: ``built_raster_zooms`` reads
+    the published range off the disk, so the landing page, the JOSM snippet and
+    the ELI entry would all go on advertising a zoom the build stopped
+    producing.  Completion zooms come and go with the data -- one build needs a
+    z20, the next finds nothing left to rescue there and drops it.
+    """
+    root = cfg.raster_tile_dir
+    if not os.path.isdir(root):
+        return 0
+    removed = 0
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name)
+        if not name.isdigit() or int(name) in rendered or not os.path.isdir(path):
+            continue
+        print(f"Raster: dropping z{name}, which this build no longer renders ...")
+        shutil.rmtree(path)
+        removed += 1
+    return removed
 
 
 def label_font_size(cfg, zoom):

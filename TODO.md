@@ -49,6 +49,9 @@ hint, is now what makes the sparse zoom navigable.
   the JOSM snippet and the ELI entry advertise what exists.
 - A dashed marker box where a zoom cannot show everything, drawn as the outline
   of the union of adjacent tiles.
+- The build deletes. Each zoom prunes the tiles it did not write this run, and
+  a zoom directory the build no longer renders at all is dropped whole. See
+  "The build never deleted tiles" below.
 
 **Oakville today:** z16-20, 73,702 tiles, 273 MB (z20 alone is 45,500 tiles and
 104 MB). Zero unlabelled addresses. 30 addresses are still *stacked* -- two
@@ -63,9 +66,9 @@ as the source problem it is.
   than upscale the parent. Whoever walks it should zoom past the deepest whole
   zoom *away* from a marker box, which is the case that 404s.
 - Oakville's z20 was rendered whole (45,500 tiles, 104 MB) before the switch and
-  those tiles are still on disk, so its next build refreshes ~36 sparse tiles
-  and republishes the stale rest. Harmless but untidy, and it will not clear
-  itself until the build learns to delete (see below).
+  those tiles are still on disk. Its next build now prunes them; that build will
+  publish a ~104 MB deletion and should be watched, since it is the first time
+  the engine removes tiles on a real city.
 - A denser candidate set (16 compass directions instead of 8) measured a further
   57 -> 11 at z19 on top of exact leaders, at the cost of doubling leader lines
   (316 -> 624). Measured again on Toronto: 251 -> 186. Not adopted; a completion
@@ -90,6 +93,23 @@ as the source problem it is.
   the most it can), but the detail layer makes it sharper: a mapper who follows
   a marker box from z19 into z20 crosses that boundary deliberately, and the
   same building can read "13" on one side of it and "13-3025" on the other.
-- The build never deletes tiles, so a zoom that renders fewer tiles than a
-  previous run leaves the extras on disk and publishes them. Harmless today
-  (they are stale but valid), and it predates the detail layer.
+## The build never deleted tiles (done, 2026-08-17)
+
+Rendering writes into the published tree and `publish` snapshots whatever is on
+disk, so a run that rendered *fewer* tiles than the last one left the surplus
+there and published it again. It predated the detail layer and read as harmless
+-- the extras are stale but valid -- until a completion zoom turned sparse and
+Oakville's z20 went from 45,500 tiles to ~36 with the other 45,464 still going
+out. An orphaned *zoom* is worse than orphaned tiles: `built_raster_zooms` reads
+the published range off the disk, so the landing page, the JOSM snippet and the
+ELI entry would go on advertising a zoom the build had stopped producing.
+
+`_render_tiles` now prunes after the write instead of clearing before it: one
+`scandir` per zoom against the key set it just rendered, deleting only actual
+orphans (normally none) rather than re-encoding every tile that did not change,
+and a crash mid-render leaves the previous zoom intact rather than half of one.
+Emptied columns go with their tiles. `build_raster` then drops any zoom
+directory not in the run's counts. Only `<x>/<y>.png` is touched. The contrast
+with `vector.py`, which does clear first, is deliberate: tippecanoe explodes
+into an empty directory anyway, and that clear is racing a WSL idle timeout
+rather than saving work.
