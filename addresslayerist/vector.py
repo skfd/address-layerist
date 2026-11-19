@@ -72,15 +72,24 @@ def build_vector(cfg):
 
 
 def win_to_wsl(path):
-    """Convert a Windows path to its /mnt/<drive> WSL equivalent."""
+    """Convert a Windows path to its /mnt/<drive> WSL equivalent.
+
+    Off Windows there is no WSL in between, and the path is returned as is.
+    """
+    if os.name != "nt":
+        return os.path.abspath(path)
     drive, rest = os.path.splitdrive(os.path.abspath(path))
     return f"/mnt/{drive.rstrip(':').lower()}{rest.replace(chr(92), '/')}"
 
 
 def _wsl(cfg, command):
-    """Run a bash command inside WSL. Returns stderr; raises on failure."""
+    """Run a bash command inside WSL (or directly, off Windows).
+
+    Returns stderr; raises on failure.
+    """
+    prefix = ["wsl", "-d", cfg.wsl_distro] if os.name == "nt" else []
     result = subprocess.run(
-        ["wsl", "-d", cfg.wsl_distro, "bash", "-lc", command],
+        [*prefix, "bash", "-lc", command],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if result.stdout:
