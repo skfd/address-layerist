@@ -36,7 +36,7 @@ def _cfg(tmp, **overrides):
         slug="toronto",
         provider="City of Toronto",
         title="Toronto Address Points",
-        pages_url="https://skfd.github.io/toronto-addresses-layer",
+        pages_url="https://toronto-maps.github.io/toronto-addresses-layer",
         attribution="Contains information licensed under the Open Government "
                     "Licence -- Toronto",
         dataset_page="https://open.toronto.ca/dataset/address-points/",
@@ -74,7 +74,7 @@ def test_entry_is_a_feature_with_the_raster_tile_url():
     assert props["type"] == "tms"
     # ELI templates use {zoom}, not iD's {z}; y is unflipped (XYZ, not TMS y).
     assert props["url"] == (
-        "https://skfd.github.io/toronto-addresses-layer"
+        "https://toronto-maps.github.io/toronto-addresses-layer"
         "/tiles/raster/{zoom}/{x}/{y}.png"
     )
     assert (props["min_zoom"], props["max_zoom"]) == (16, 19)
